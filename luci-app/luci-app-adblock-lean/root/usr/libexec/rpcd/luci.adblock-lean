@@ -1,0 +1,280 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# rpcd backend for luci-app-adblock-lean (adblock-lean 0.8.x).
+#
+# Read-only methods never start an adblock-lean session: status() inside
+# adblock-lean rotates its session log, which is where the per-list counts of
+# the last update live. State is read from adblock-lean's own files instead:
+#   /tmp/adblock-lean/adblock-lean.pid      lock (PID) while an action runs
+#   /tmp/adblock-lean/adblock-lean.action   what that action is
+#   /var/run/adblock-lean/abl-blocklist*    the active blocklist
+#   /var/run/adblock-lean/prev_blocklist*   kept while paused
+#   /var/log/abl_session.log[.0]            session logs (per-list counts)
+# Actions run /etc/init.d/adblock-lean <cmd> in the background; the page polls.
+#
+#   ubus -v call luci.adblock-lean status
+#   ubus -v call luci.adblock-lean check '{"domain":"ads.example.com"}'
+
+. /usr/share/libubox/jshn.sh
+
+ABL_SERVICE=/etc/init.d/adblock-lean
+ABL_CONFIG=/etc/adblock-lean/config
+ABL_RUN_DIR=/var/run/adblock-lean
+ABL_PID_DIR=/tmp/adblock-lean
+ABL_SESSION_LOG=/var/log/abl_session.log
+CACHE_DIR=/var/run/luci-adblock-lean
+
+# value of key="value" in the adblock-lean config
+cfg_get() {
+	sed -n "s/^[[:space:]]*$1=\"\(.*\)\"[[:space:]]*$/\1/p" "$ABL_CONFIG" 2>/dev/null | tail -n1
+}
+
+blocklist_file() {
+	local f
+	for f in "$ABL_RUN_DIR"/abl-blocklist*; do
+		[ -f "$f" ] && { echo "$f"; return 0; }
+	done
+	return 1
+}
+
+# print the blocklist as dnsmasq lines, whatever its compression
+cat_blocklist() {
+	case "$1" in
+		*.gz) busybox gzip -cd "$1" ;;
+		*) cat "$1" ;;
+	esac
+}
+
+# active | paused | stopped | busy:<action>
+run_state() {
+	local pid action f
+	if [ -f "$ABL_PID_DIR/adblock-lean.pid" ]; then
+		read -r pid _ < "$ABL_PID_DIR/adblock-lean.pid"
+		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+			action=$(head -n1 "$ABL_PID_DIR/adblock-lean.action" 2>/dev/null)
+			echo "busy:${action:-working}"
+			return
+		fi
+	fi
+	for f in "$ABL_RUN_DIR"/prev_blocklist*; do
+		[ -e "$f" ] && { echo paused; return; }
+	done
+	blocklist_file >/dev/null && { echo active; return; }
+	echo stopped
+}
+
+# entries in the active blocklist, cached by the file's mtime
+entries_count() {
+	local f mt cached
+	f=$(blocklist_file) || { echo 0; return; }
+	mt=$(date -r "$f" +%s)
+	mkdir -p "$CACHE_DIR"
+	if [ -f "$CACHE_DIR/entries" ]; then
+		read -r cached < "$CACHE_DIR/entries"
+		[ "${cached%% *}" = "$mt" ] && { echo "${cached#* }"; return; }
+	fi
+	cached=$(cat_blocklist "$f" | awk -F/ '/^local=\//{n+=NF-2} END{print n+0}')
+	echo "$mt $cached" > "$CACHE_DIR/entries"
+	echo "$cached"
+}
+
+# Per-list lines from the newest session log that processed lists. Kept in
+# the cache so later sessions (status, pause) that rotate the log lose nothing.
+#   Successfully processed list:  hagezi:pro   [   4.64 MiB -  241,191 lines ]
+refresh_list_stats() {
+	local log stamp
+	mkdir -p "$CACHE_DIR"
+	for log in "$ABL_SESSION_LOG" "$ABL_SESSION_LOG.0"; do
+		[ -s "$log" ] || continue
+		grep -q 'Successfully processed list:' "$log" || continue
+		stamp=$(date -r "$log" +%s)
+		if [ -f "$CACHE_DIR/lists.stamp" ] && [ "$(cat "$CACHE_DIR/lists.stamp")" -ge "$stamp" ]; then
+			return
+		fi
+		sed -n 's/.*Successfully processed list:[[:space:]]*\([^[:space:]]*\)[[:space:]]*\[[[:space:]]*\([0-9.]*[[:space:]]*[KMG]*i*B\)[[:space:]]*-[[:space:]]*\([0-9,]*\) lines.*/\1|\2|\3/p' "$log" \
+			| tr -d ',' > "$CACHE_DIR/lists.tmp" &&
+			mv "$CACHE_DIR/lists.tmp" "$CACHE_DIR/lists"
+		grep -o 'Processing time for blocklist generation and import: .*' "$log" | tail -n1 \
+			| sed 's/.*: //; s/\.$//' > "$CACHE_DIR/lists.duration"
+		grep -o 'Successfully generated preprocessed blocklist file with [0-9,]* entries' "$log" | tail -n1 \
+			| sed 's/[^0-9]//g' > "$CACHE_DIR/lists.preprocessed"
+		echo "$stamp" > "$CACHE_DIR/lists.stamp"
+		return
+	done
+}
+
+m_status() {
+	local state f ts=0 name size lines
+	state=$(run_state)
+	f=$(blocklist_file) && ts=$(date -r "$f" +%s)
+	refresh_list_stats
+
+	json_init
+	json_add_string version "$(sed -n 's/^ABL_VERSION="\(.*\)"/\1/p' "$ABL_SERVICE" 2>/dev/null)"
+	json_add_boolean installed "$([ -x "$ABL_SERVICE" ] && echo 1 || echo 0)"
+	json_add_boolean enabled "$("$ABL_SERVICE" enabled 2>/dev/null && echo 1 || echo 0)"
+	json_add_string state "$state"
+	json_add_int entries "$( [ "$state" = active ] && entries_count || echo 0)"
+	json_add_int updated "$ts"
+	json_add_int now "$(date +%s)"
+	json_add_boolean dnsmasq_running "$(pidof dnsmasq >/dev/null && echo 1 || echo 0)"
+	json_add_string cron "$(crontab -l 2>/dev/null | grep -m1 'adblock-lean' | awk '{print $1,$2,$3,$4,$5}')"
+	json_add_string raw_block_lists "$(cfg_get raw_block_lists)"
+	json_add_string raw_allow_lists "$(cfg_get raw_allow_lists)"
+	json_add_string dnsmasq_block_lists "$(cfg_get dnsmasq_block_lists)"
+	json_add_string hosts_block_lists "$(cfg_get hosts_block_lists)"
+	json_add_string whitelist_mode "$(cfg_get whitelist_mode)"
+	json_add_string last_duration "$(cat "$CACHE_DIR/lists.duration" 2>/dev/null)"
+	json_add_int last_preprocessed "$(cat "$CACHE_DIR/lists.preprocessed" 2>/dev/null || echo 0)"
+	json_add_int lists_at "$(cat "$CACHE_DIR/lists.stamp" 2>/dev/null || echo 0)"
+	json_add_array lists
+	if [ -f "$CACHE_DIR/lists" ]; then
+		while IFS='|' read -r name size lines; do
+			json_add_object
+			json_add_string name "$name"
+			json_add_string size "$size"
+			json_add_int lines "${lines:-0}"
+			json_close_object
+		done < "$CACHE_DIR/lists"
+	fi
+	json_close_array
+	json_dump
+}
+
+valid_domain() {
+	case "$1" in
+		''|*[!a-z0-9._-]*|.*|*.|*..*) return 1 ;;
+	esac
+	[ "${#1}" -le 253 ]
+}
+
+# Is a domain blocked, allowed or neither? Same matching as dnsmasq: an
+# entry for a parent domain covers its subdomains; the longest match wins.
+m_check() {
+	local domain f d names='' result
+	read -r input
+	json_load "$input"
+	json_get_var domain domain
+	domain=$(echo "$domain" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/\.$//')
+	json_init
+	if ! valid_domain "$domain"; then
+		json_add_string error "not a valid domain name"
+		json_dump
+		return
+	fi
+	f=$(blocklist_file)
+	if [ -z "$f" ]; then
+		json_add_string domain "$domain"
+		json_add_string result none
+		json_add_string error "no active blocklist"
+		json_dump
+		return
+	fi
+	d=$domain
+	while :; do
+		names="$names $d"
+		case "$d" in *.*) d=${d#*.} ;; *) break ;; esac
+	done
+	result=$(cat_blocklist "$f" | awk -F/ -v names="$names" '
+		BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = i }
+		/^local=\// || /^server=\// {
+			kind = ($1 == "local=") ? "blocked" : "allowed"
+			for (i = 2; i < NF; i++) if ($i in want) {
+				r = want[$i]
+				if (!(r in hit)) hit[r] = kind " " $i
+			}
+		}
+		END { for (i = 1; i <= n; i++) if (i in hit) { print hit[i]; exit } print "none" }')
+	json_add_string domain "$domain"
+	json_add_string result "${result%% *}"
+	[ "$result" != none ] && json_add_string matched "${result#* }"
+	json_dump
+}
+
+m_action() {
+	local name
+	read -r input
+	json_load "$input"
+	json_get_var name name
+	json_init
+	case "$name" in
+		start|stop|restart|pause|resume|enable|disable) ;;
+		*) json_add_boolean ok 0; json_add_string error "unknown action"; json_dump; return ;;
+	esac
+	case "$(run_state)" in
+		busy:*)
+			json_add_boolean ok 0
+			json_add_string error "adblock-lean is busy: $(run_state | cut -d: -f2-)"
+			json_dump
+			return
+	esac
+	case "$name" in
+		enable|disable)
+			"$ABL_SERVICE" "$name" >/dev/null 2>&1
+			json_add_boolean ok "$([ $? = 0 ] && echo 1 || echo 0)"
+			;;
+		*)
+			# Long-running (start downloads every list): detach and let the page poll.
+			( setsid "$ABL_SERVICE" "$name" </dev/null >/dev/null 2>&1 & )
+			json_add_boolean ok 1
+			;;
+	esac
+	json_dump
+}
+
+# Replace the list sources. Each token: hagezi:<name>, oisd:<name>,
+# stevenblack:<name>, or an http(s) URL. Takes effect on the next update.
+m_set_lists() {
+	local key val tok
+	read -r input
+	json_load "$input"
+	json_get_var key key
+	json_get_var val value
+	json_init
+	case "$key" in
+		raw_block_lists|raw_allow_lists|dnsmasq_block_lists|hosts_block_lists) ;;
+		*) json_add_boolean ok 0; json_add_string error "unknown key"; json_dump; return ;;
+	esac
+	val=$(echo "$val" | tr -s ' \t\n' '   ' | sed 's/^ //; s/ $//')
+	for tok in $val; do
+		case "$tok" in
+			hagezi:*|oisd:*|stevenblack:*|http://*|https://*) ;;
+			*) json_add_boolean ok 0; json_add_string error "unsupported list: $tok"; json_dump; return ;;
+		esac
+		case "$tok" in
+			*[\"\'\`\$\\\;\&\|\<\>]*) json_add_boolean ok 0; json_add_string error "invalid characters in: $tok"; json_dump; return ;;
+		esac
+	done
+	grep -q "^$key=\"" "$ABL_CONFIG" || { json_add_boolean ok 0; json_add_string error "$key not in config"; json_dump; return; }
+	sed -i "s|^$key=\".*\"|$key=\"$val\"|" "$ABL_CONFIG"
+	json_add_boolean ok "$([ "$(cfg_get "$key")" = "$val" ] && echo 1 || echo 0)"
+	json_dump
+}
+
+m_log() {
+	json_init
+	json_add_string session "$(tail -n 200 "$ABL_SESSION_LOG" 2>/dev/null)"
+	json_add_string syslog "$(logread -e adblock-lean 2>/dev/null | tail -n 50)"
+	json_dump
+}
+
+case "$1" in
+	list)
+		json_init
+		json_add_object status; json_close_object
+		json_add_object check; json_add_string domain str; json_close_object
+		json_add_object action; json_add_string name str; json_close_object
+		json_add_object set_lists; json_add_string key str; json_add_string value str; json_close_object
+		json_add_object log; json_close_object
+		json_dump
+		;;
+	call)
+		case "$2" in
+			status) m_status ;;
+			check) m_check ;;
+			action) m_action ;;
+			set_lists) m_set_lists ;;
+			log) m_log ;;
+		esac
+		;;
+esac

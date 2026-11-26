@@ -1,0 +1,23 @@
+{
+	"luci-app-adblock-lean": {
+		"description": "Grant access to adblock-lean",
+		"read": {
+			"ubus": {
+				"luci.adblock-lean": [ "status", "check", "log" ]
+			},
+			"file": {
+				"/etc/adblock-lean/allowlist": [ "read" ],
+				"/etc/adblock-lean/blocklist": [ "read" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.adblock-lean": [ "action", "set_lists" ]
+			},
+			"file": {
+				"/etc/adblock-lean/allowlist": [ "write" ],
+				"/etc/adblock-lean/blocklist": [ "write" ]
+			}
+		}
+	}
+}
