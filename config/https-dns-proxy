@@ -1,0 +1,29 @@
+# https-dns-proxy for adblock-lean-plus: three DoH upstreams on 127.0.0.1, no plain-DNS fallback.
+# Written before the package is installed so that the package does NOT rewrite dnsmasq or add
+# firewall rules (dnsmasq_config_update '-', force_dns '0'); dnsmasq is pointed at the proxies by hand
+# (see README). Edit with LuCI (luci-app-https-dns-proxy) or here, then: service https-dns-proxy restart
+config main 'config'
+	option canary_domains_icloud '0'
+	option canary_domains_mozilla '0'
+	option dnsmasq_config_update '-'
+	option force_dns '0'
+	option notrack_dns '0'
+	option heartbeat_domain '-'
+	option user 'nobody'
+	option group 'nogroup'
+	option listen_addr '127.0.0.1'
+
+config https-dns-proxy
+	option bootstrap_dns '1.1.1.1,1.0.0.1'
+	option resolver_url 'https://dns.cloudflare.com/dns-query'
+	option listen_port '5053'
+
+config https-dns-proxy
+	option bootstrap_dns '94.140.14.140,94.140.14.141'
+	option resolver_url 'https://unfiltered.adguard-dns.com/dns-query'
+	option listen_port '5054'
+
+config https-dns-proxy
+	option bootstrap_dns '9.9.9.9,149.112.112.112'
+	option resolver_url 'https://dns.quad9.net/dns-query'
+	option listen_port '5055'
