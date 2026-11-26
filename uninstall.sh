@@ -242,6 +242,10 @@ if [ "$blocker" = 1 ]; then
 	else
 		say "  removed"
 		rm -f /var/log/abl_session.log*
+		# adblock-lean removes its addnmount entries after its last restart of dnsmasq: restart once more,
+		# so the running dnsmasq lets go of those paths
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1 ||
+			{ say "  WARNING: dnsmasq did not restart"; failed="$failed dnsmasq"; }
 	fi
 fi
 
