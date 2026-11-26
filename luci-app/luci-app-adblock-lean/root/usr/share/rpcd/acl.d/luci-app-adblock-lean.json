@@ -3,20 +3,12 @@
 		"description": "Grant access to adblock-lean",
 		"read": {
 			"ubus": {
-				"luci.adblock-lean": [ "status", "check", "log" ]
-			},
-			"file": {
-				"/etc/adblock-lean/allowlist": [ "read" ],
-				"/etc/adblock-lean/blocklist": [ "read" ]
+				"luci.adblock-lean": [ "status", "check", "log", "get_subscriptions", "get_local", "get_catalog" ]
 			}
 		},
 		"write": {
 			"ubus": {
-				"luci.adblock-lean": [ "action", "set_lists" ]
-			},
-			"file": {
-				"/etc/adblock-lean/allowlist": [ "write" ],
-				"/etc/adblock-lean/blocklist": [ "write" ]
+				"luci.adblock-lean": [ "action", "set_subscriptions", "set_local", "set_schedule", "detect_format" ]
 			}
 		}
 	}

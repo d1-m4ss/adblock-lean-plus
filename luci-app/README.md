@@ -1,3 +1,5 @@
+> **adblock-lean-plus:** this directory is a modified copy of [Wildside-UK/luci-app-adblock-lean](https://github.com/Wildside-UK/luci-app-adblock-lean) for the adblock-lean fork in `../adblock-lean`. It does not work with upstream adblock-lean 0.8.x. Install it with `../install.sh --gui`, not from the upstream package feed below. Changes: [FORK-NOTES.md](FORK-NOTES.md).
+
 # luci-app-adblock-lean
 
 LuCI pages for [adblock-lean](https://github.com/lynxthecat/adblock-lean) 0.8.x. Tested with adblock-lean 0.8.1 on OpenWrt SNAPSHOT (apk).

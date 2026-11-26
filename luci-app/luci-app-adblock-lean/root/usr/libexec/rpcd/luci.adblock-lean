@@ -1,16 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# rpcd backend for luci-app-adblock-lean (adblock-lean 0.8.x).
-#
-# Read-only methods never start an adblock-lean session: status() inside
-# adblock-lean rotates its session log, which is where the per-list counts of
-# the last update live. State is read from adblock-lean's own files instead:
-#   /tmp/adblock-lean/adblock-lean.pid      lock (PID) while an action runs
-#   /tmp/adblock-lean/adblock-lean.action   what that action is
-#   /var/run/adblock-lean/abl-blocklist*    the active blocklist
-#   /var/run/adblock-lean/prev_blocklist*   kept while paused
-#   /var/log/abl_session.log[.0]            session logs (per-list counts)
-# Actions run /etc/init.d/adblock-lean <cmd> in the background; the page polls.
+# Modified in adblock-lean-plus (2026-11): see FORK-NOTES.md for the changes against upstream.
+# rpcd backend for luci-app-adblock-lean (adblock-lean-plus).
+# Targets the adblock-lean fork (upstream 'next-version' layout + adguard_block_lists):
+#   /etc/adblock-lean/global.conf, /etc/adblock-lean/blockset-<id>.conf (the lowest id is used)
+#   /tmp/abl-pid/adblock-lean.pid|.action      lock while an action runs
+#   /var/run/adblock-lean/blockset-metadata    PATH/CNT of the installed blockset (kept while paused)
+#   <dnsmasq conf-dir>/abl-conf-script.<id> or abl-blockset-<id>[.ext]   the active blockset
+#   /var/log/abl_session.log[.0]               session logs (per-part counts)
+#   /etc/adblock-lean/luci-subscriptions       subscriptions incl. switched-off ones (this app's file)
+# Read-only methods never start an adblock-lean session. Actions run the init script in the
+# background; the page polls. Nothing here runs while no LuCI page is open.
 #
 #   ubus -v call luci.adblock-lean status
 #   ubus -v call luci.adblock-lean check '{"domain":"ads.example.com"}'
@@ -18,114 +18,241 @@
 . /usr/share/libubox/jshn.sh
 
 ABL_SERVICE=/etc/init.d/adblock-lean
-ABL_CONFIG=/etc/adblock-lean/config
+ABL_CFG_DIR=/etc/adblock-lean
+GLOBAL_CFG="$ABL_CFG_DIR/global.conf"
 ABL_RUN_DIR=/var/run/adblock-lean
-ABL_PID_DIR=/tmp/adblock-lean
+META_FILE="$ABL_RUN_DIR/blockset-metadata"
+ABL_PID_DIR=/tmp/abl-pid
 ABL_SESSION_LOG=/var/log/abl_session.log
+SUBS_FILE="$ABL_CFG_DIR/luci-subscriptions"
 CACHE_DIR=/var/run/luci-adblock-lean
+ESC=$(printf '\033')
+ALL_FORMATS="adguard raw hosts raw_allow"
+LIST_KEYS="adguard_block_lists raw_block_lists hosts_block_lists raw_allow_lists"
 
-# value of key="value" in the adblock-lean config
-cfg_get() {
-	sed -n "s/^[[:space:]]*$1=\"\(.*\)\"[[:space:]]*$/\1/p" "$ABL_CONFIG" 2>/dev/null | tail -n1
+key_for_format() {
+	case "$1" in
+		adguard) echo adguard_block_lists ;;
+		raw) echo raw_block_lists ;;
+		hosts) echo hosts_block_lists ;;
+		raw_allow) echo raw_allow_lists ;;
+		*) return 1 ;;
+	esac
 }
 
-blocklist_file() {
+reply_fail() { json_init; json_add_boolean ok 0; json_add_string error "$1"; json_dump; }
+
+# blockset config with the lowest numeric id (blockset-2 before blockset-10)
+set_cfg() {
 	local f
-	for f in "$ABL_RUN_DIR"/abl-blocklist*; do
-		[ -f "$f" ] && { echo "$f"; return 0; }
+	f=$(ls "$ABL_CFG_DIR"/blockset-*.conf 2>/dev/null |
+		sed -n 's|.*/blockset-\(.*\)\.conf$|\1 &|p' | sort -n | head -n1 | cut -d' ' -f2-)
+	[ -n "$f" ] && [ -f "$f" ] && echo "$f"
+}
+
+set_id() {
+	local f
+	f=$(set_cfg) || return 1
+	f=${f##*/blockset-}
+	echo "${f%.conf}"
+}
+
+# value of key="value" in a config file
+cfg_get() {
+	sed -n "s/^[[:space:]]*$2=\"\([^\"]*\)\"[[:space:]]*\(#.*\)\{0,1\}$/\1/p" "$1" 2>/dev/null | tail -n1
+}
+
+# Rewrite key="value" lines of file $1 in one pass; args: key=value ... (every key must exist)
+cfg_set_many() {
+	local f="$1" kv k tmp
+	shift
+	for kv in "$@"; do
+		k=${kv%%=*}
+		grep -q "^[[:space:]]*$k=\"" "$f" || return 1
+	done
+	tmp=$(mktemp "$f.XXXXXX") || return 1
+	awk '
+		BEGIN { for (i = 1; i < ARGC; i++) { p = index(ARGV[i], "="); v[substr(ARGV[i], 1, p - 1)] = substr(ARGV[i], p + 1); ARGV[i] = "" } }
+		{ for (k in v) if ($0 ~ "^[ \t]*" k "=\"") { print k "=\"" v[k] "\""; next } print }
+	' "$@" < "$f" > "$tmp" && mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+}
+
+conf_dirs() {
+	local f dirs d
+	f=$(set_cfg) && dirs=$(cfg_get "$f" dnsmasq_conf_dirs)
+	[ -n "$dirs" ] || dirs=$(ls -d /tmp/dnsmasq*.d 2>/dev/null)
+	for d in $dirs; do [ -d "$d" ] && echo "$d"; done
+}
+
+# option value from the RAM metadata block of the blockset: meta_get <id> <PATH|CNT|MD5>
+meta_get() {
+	awk -v id="$1" -v opt="$2" '
+		$1 == "config" { cur = $3; gsub("'\''", "", cur); next }
+		cur == id && $1 == "option" && $2 == opt { v = $3; gsub("'\''", "", v); print v; exit }' "$META_FILE" 2>/dev/null
+}
+
+# path of the active blockset file (from the conf-script or directly in a conf-dir)
+active_blockset() {
+	local id d f p
+	id=$(set_id) || return 1
+	for d in $(conf_dirs); do
+		f="$d/abl-conf-script.$id"
+		if [ -f "$f" ]; then
+			p=$(sed -n 's/.*\\"\(\/[^\\"]*\)\\".*/\1/p' "$f" | head -n1)
+			[ -n "$p" ] && [ -f "$p" ] && { echo "$p"; return 0; }
+		fi
+		for f in "$d/abl-blockset-$id" "$d/abl-blockset-$id".*; do
+			[ -f "$f" ] && { echo "$f"; return 0; }
+		done
 	done
 	return 1
 }
 
-# print the blocklist as dnsmasq lines, whatever its compression
-cat_blocklist() {
+cat_blockset() {
 	case "$1" in
 		*.gz) busybox gzip -cd "$1" ;;
+		*.zst) zstd -dc "$1" ;;
 		*) cat "$1" ;;
 	esac
 }
 
 # active | paused | stopped | busy:<action>
 run_state() {
-	local pid action f
+	local pid action id p
 	if [ -f "$ABL_PID_DIR/adblock-lean.pid" ]; then
 		read -r pid _ < "$ABL_PID_DIR/adblock-lean.pid"
 		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
 			action=$(head -n1 "$ABL_PID_DIR/adblock-lean.action" 2>/dev/null)
-			echo "busy:${action:-working}"
+			echo "busy:${action#dummy }"
 			return
 		fi
 	fi
-	for f in "$ABL_RUN_DIR"/prev_blocklist*; do
-		[ -e "$f" ] && { echo paused; return; }
-	done
-	blocklist_file >/dev/null && { echo active; return; }
+	active_blockset >/dev/null && { echo active; return; }
+	id=$(set_id) && p=$(meta_get "$id" PATH) && [ -n "$p" ] && [ -f "$p" ] && { echo paused; return; }
 	echo stopped
 }
 
-# entries in the active blocklist, cached by the file's mtime
+is_busy() { case "$(run_state)" in busy:*) return 0 ;; esac; return 1; }
+
+# entries in the active blockset: CNT from the metadata, else counted once and cached by path+mtime
 entries_count() {
-	local f mt cached
-	f=$(blocklist_file) || { echo 0; return; }
-	mt=$(date -r "$f" +%s)
+	local f mt cached id
+	id=$(set_id) && cached=$(meta_get "$id" CNT) && [ -n "$cached" ] && { echo "$cached"; return; }
+	f=$(active_blockset) || { echo 0; return; }
+	mt="$(date -r "$f" +%s)$f"
 	mkdir -p "$CACHE_DIR"
 	if [ -f "$CACHE_DIR/entries" ]; then
 		read -r cached < "$CACHE_DIR/entries"
 		[ "${cached%% *}" = "$mt" ] && { echo "${cached#* }"; return; }
 	fi
-	cached=$(cat_blocklist "$f" | awk -F/ '/^local=\//{n+=NF-2} END{print n+0}')
+	cached=$(cat_blockset "$f" | awk -F/ '/^local=\//{n+=NF-2} END{print n+0}')
 	echo "$mt $cached" > "$CACHE_DIR/entries"
 	echo "$cached"
 }
 
-# Per-list lines from the newest session log that processed lists. Kept in
-# the cache so later sessions (status, pause) that rotate the log lose nothing.
-#   Successfully processed list:  hagezi:pro   [   4.64 MiB -  241,191 lines ]
+# Per-part lines from the newest session log that processed parts, kept in the cache
+#   Successfully processed part:    <id>   [ 4.73 MiB  -   251,436 entries ]
 refresh_list_stats() {
 	local log stamp
 	mkdir -p "$CACHE_DIR"
 	for log in "$ABL_SESSION_LOG" "$ABL_SESSION_LOG.0"; do
 		[ -s "$log" ] || continue
-		grep -q 'Successfully processed list:' "$log" || continue
+		grep -q 'Successfully processed part:' "$log" || continue
 		stamp=$(date -r "$log" +%s)
 		if [ -f "$CACHE_DIR/lists.stamp" ] && [ "$(cat "$CACHE_DIR/lists.stamp")" -ge "$stamp" ]; then
 			return
 		fi
-		sed -n 's/.*Successfully processed list:[[:space:]]*\([^[:space:]]*\)[[:space:]]*\[[[:space:]]*\([0-9.]*[[:space:]]*[KMG]*i*B\)[[:space:]]*-[[:space:]]*\([0-9,]*\) lines.*/\1|\2|\3/p' "$log" \
-			| tr -d ',' > "$CACHE_DIR/lists.tmp" &&
+		sed "s/${ESC}\[[0-9;]*m//g" "$log" |
+			sed -n 's/.*Successfully processed part:[[:space:]]*\([^[:space:]]*\)[[:space:]]*\[[[:space:]]*\([0-9.]*[[:space:]]*[KMG]*i*B\)[[:space:]]*-[[:space:]]*\([0-9,]*\) entries.*/\1|\2|\3/p' |
+			tr -d ',' > "$CACHE_DIR/lists.tmp" &&
 			mv "$CACHE_DIR/lists.tmp" "$CACHE_DIR/lists"
-		grep -o 'Processing time for blocklist generation and import: .*' "$log" | tail -n1 \
+		sed "s/${ESC}\[[0-9;]*m//g" "$log" | grep -o 'Processing time for blockset generation and import: .*' | tail -n1 \
 			| sed 's/.*: //; s/\.$//' > "$CACHE_DIR/lists.duration"
-		grep -o 'Successfully generated preprocessed blocklist file with [0-9,]* entries' "$log" | tail -n1 \
-			| sed 's/[^0-9]//g' > "$CACHE_DIR/lists.preprocessed"
 		echo "$stamp" > "$CACHE_DIR/lists.stamp"
 		return
 	done
 }
 
+# Short ids are case-insensitive in adblock-lean; store them lowercased
+norm_source() {
+	case "$1" in
+		[Hh][Tt][Tt][Pp]://*) echo "http://${1#*://}" ;;
+		[Hh][Tt][Tt][Pp][Ss]://*) echo "https://${1#*://}" ;;
+		*) echo "$1" | tr 'A-Z' 'a-z' ;;
+	esac
+}
+
+# Allowlist of characters: anything else (quotes, '=', '$', spaces, control characters...) would break
+# the key="value" config line or adblock-lean's config parser.
+valid_source() {
+	case "$1" in
+		''|*[!A-Za-z0-9._~:/?%+@,!*\(\)-]*) return 1 ;;
+		http://?*|https://?*) return 0 ;;
+	esac
+	case "$2:$1" in
+		raw:hagezi:?*|raw:oisd:?*|raw_allow:hagezi:?*|hosts:stevenblack:?*) return 0 ;;
+	esac
+	return 1
+}
+
+# Bring the subscriptions file in line with the config: the config decides what is enabled
+# (it may have been edited by hand or by 'service adblock-lean setup'); entries switched off in
+# LuCI stay in the file as off; config entries missing from the file are added as on.
+sync_subs() {
+	local cfg fmt key src en tmp vals tok
+	cfg=$(set_cfg) || return 1
+	tmp=$(mktemp "$SUBS_FILE.XXXXXX") || return 1
+	{
+		[ -f "$SUBS_FILE" ] && while read -r en fmt src; do
+			[ -n "$src" ] || continue
+			key=$(key_for_format "$fmt") || continue
+			vals=" "
+			set -f
+			for tok in $(cfg_get "$cfg" "$key"); do vals="$vals$(norm_source "$tok") "; done
+			set +f
+			case "$vals" in *" $src "*) echo "1 $fmt $src" ;; *) echo "0 $fmt $src" ;; esac
+		done < "$SUBS_FILE"
+		for fmt in $ALL_FORMATS; do
+			key=$(key_for_format "$fmt")
+			set -f
+			for src in $(cfg_get "$cfg" "$key"); do
+				src=$(norm_source "$src")
+				[ -f "$SUBS_FILE" ] && grep -qxF "1 $fmt $src" "$SUBS_FILE" && continue
+				[ -f "$SUBS_FILE" ] && grep -qxF "0 $fmt $src" "$SUBS_FILE" && continue
+				echo "1 $fmt $src"
+			done
+			set +f
+		done
+	} > "$tmp" || { rm -f "$tmp"; return 1; }
+	# rewrite only when something changed (flash writes)
+	if [ -f "$SUBS_FILE" ] && cmp -s "$tmp" "$SUBS_FILE"; then rm -f "$tmp"; return 0; fi
+	mv "$tmp" "$SUBS_FILE" || { rm -f "$tmp"; return 1; }
+}
+
 m_status() {
-	local state f ts=0 name size lines
+	local state f ts=0 name size lines id cfg
 	state=$(run_state)
-	f=$(blocklist_file) && ts=$(date -r "$f" +%s)
+	f=$(active_blockset) && ts=$(date -r "$f" +%s)
 	refresh_list_stats
+	id=$(set_id)
+	cfg=$(set_cfg)
 
 	json_init
-	json_add_string version "$(sed -n 's/^ABL_VERSION="\(.*\)"/\1/p' "$ABL_SERVICE" 2>/dev/null)"
+	json_add_string version "$(sed -n 's/^ABL_VERSION="*\([^"]*\)"*$/\1/p' "$ABL_SERVICE" 2>/dev/null | head -n1)"
 	json_add_boolean installed "$([ -x "$ABL_SERVICE" ] && echo 1 || echo 0)"
-	json_add_boolean enabled "$("$ABL_SERVICE" enabled 2>/dev/null && echo 1 || echo 0)"
+	json_add_boolean configured "$([ -n "$cfg" ] && echo 1 || echo 0)"
+	json_add_string blockset "$id"
+	json_add_boolean enabled "$([ -L /etc/rc.d/S99adblock-lean ] && echo 1 || echo 0)"
+	json_add_boolean early_boot "$([ -x /etc/init.d/adblock-lean-early ] && echo 1 || echo 0)"
 	json_add_string state "$state"
 	json_add_int entries "$( [ "$state" = active ] && entries_count || echo 0)"
 	json_add_int updated "$ts"
 	json_add_int now "$(date +%s)"
 	json_add_boolean dnsmasq_running "$(pidof dnsmasq >/dev/null && echo 1 || echo 0)"
 	json_add_string cron "$(crontab -l 2>/dev/null | grep -m1 'adblock-lean' | awk '{print $1,$2,$3,$4,$5}')"
-	json_add_string raw_block_lists "$(cfg_get raw_block_lists)"
-	json_add_string raw_allow_lists "$(cfg_get raw_allow_lists)"
-	json_add_string dnsmasq_block_lists "$(cfg_get dnsmasq_block_lists)"
-	json_add_string hosts_block_lists "$(cfg_get hosts_block_lists)"
-	json_add_string whitelist_mode "$(cfg_get whitelist_mode)"
+	json_add_string upd_schedule "$(cfg_get "$GLOBAL_CFG" upd_schedule)"
+	json_add_string whitelist_mode "$(cfg_get "$cfg" whitelist_mode)"
 	json_add_string last_duration "$(cat "$CACHE_DIR/lists.duration" 2>/dev/null)"
-	json_add_int last_preprocessed "$(cat "$CACHE_DIR/lists.preprocessed" 2>/dev/null || echo 0)"
 	json_add_int lists_at "$(cat "$CACHE_DIR/lists.stamp" 2>/dev/null || echo 0)"
 	json_add_array lists
 	if [ -f "$CACHE_DIR/lists" ]; then
@@ -151,7 +278,7 @@ valid_domain() {
 # Is a domain blocked, allowed or neither? Same matching as dnsmasq: an
 # entry for a parent domain covers its subdomains; the longest match wins.
 m_check() {
-	local domain f d names='' result
+	local domain f d names='' result cfg
 	read -r input
 	json_load "$input"
 	json_get_var domain domain
@@ -162,29 +289,33 @@ m_check() {
 		json_dump
 		return
 	fi
-	f=$(blocklist_file)
+	f=$(active_blockset)
 	if [ -z "$f" ]; then
 		json_add_string domain "$domain"
 		json_add_string result none
-		json_add_string error "no active blocklist"
+		json_add_string error "no active blockset"
 		json_dump
 		return
 	fi
+	# candidates, most specific first: a.b.c, *.b.c (covers subdomains of b.c only), b.c, *.c, c
 	d=$domain
 	while :; do
 		names="$names $d"
-		case "$d" in *.*) d=${d#*.} ;; *) break ;; esac
+		case "$d" in *.*) d=${d#*.}; names="$names *.$d" ;; *) break ;; esac
 	done
-	result=$(cat_blocklist "$f" | awk -F/ -v names="$names" '
+	result=$(cat_blockset "$f" | awk -F/ -v names="$names" '
 		BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = i }
 		/^local=\// || /^server=\// {
 			kind = ($1 == "local=") ? "blocked" : "allowed"
 			for (i = 2; i < NF; i++) if ($i in want) {
 				r = want[$i]
-				if (!(r in hit)) hit[r] = kind " " $i
+				if (!(r in hit) || kind == "allowed") hit[r] = kind " " $i
 			}
 		}
 		END { for (i = 1; i <= n; i++) if (i in hit) { print hit[i]; exit } print "none" }')
+	cfg=$(set_cfg)
+	# whitelist mode: everything that is not allowed is blocked by a catch-all entry
+	[ "$result" = none ] && [ "$(cfg_get "$cfg" whitelist_mode)" = 1 ] && result="blocked (whitelist mode)"
 	json_add_string domain "$domain"
 	json_add_string result "${result%% *}"
 	[ "$result" != none ] && json_add_string matched "${result#* }"
@@ -192,26 +323,25 @@ m_check() {
 }
 
 m_action() {
-	local name
+	local name state
 	read -r input
 	json_load "$input"
 	json_get_var name name
-	json_init
 	case "$name" in
 		start|stop|restart|pause|resume|enable|disable) ;;
-		*) json_add_boolean ok 0; json_add_string error "unknown action"; json_dump; return ;;
+		*) reply_fail "unknown action"; return ;;
 	esac
-	case "$(run_state)" in
-		busy:*)
-			json_add_boolean ok 0
-			json_add_string error "adblock-lean is busy: $(run_state | cut -d: -f2-)"
-			json_dump
-			return
+	state=$(run_state)
+	case "$state" in busy:*) reply_fail "adblock-lean is busy: ${state#busy:}"; return ;; esac
+	case "$name,$state" in
+		resume,active) reply_fail "already active"; return ;;
+		resume,stopped) reply_fail "nothing to resume: the blockset is stopped, use Update lists now"; return ;;
+		pause,paused|pause,stopped) reply_fail "not active"; return ;;
 	esac
+	json_init
 	case "$name" in
 		enable|disable)
-			"$ABL_SERVICE" "$name" >/dev/null 2>&1
-			json_add_boolean ok "$([ $? = 0 ] && echo 1 || echo 0)"
+			if "$ABL_SERVICE" "$name" >/dev/null 2>&1; then json_add_boolean ok 1; else json_add_boolean ok 0; fi
 			;;
 		*)
 			# Long-running (start downloads every list): detach and let the page poll.
@@ -222,38 +352,234 @@ m_action() {
 	json_dump
 }
 
-# Replace the list sources. Each token: hagezi:<name>, oisd:<name>,
-# stevenblack:<name>, or an http(s) URL. Takes effect on the next update.
-m_set_lists() {
-	local key val tok
+m_get_subscriptions() {
+	local en fmt src
+	sync_subs || { reply_fail "no blockset config in $ABL_CFG_DIR"; return; }
+	json_init
+	json_add_array subscriptions
+	while read -r en fmt src; do
+		[ -n "$fmt" ] || continue
+		json_add_object
+		json_add_boolean enabled "$en"
+		json_add_string format "$fmt"
+		json_add_string source "$src"
+		json_close_object
+	done < "$SUBS_FILE"
+	json_close_array
+	json_dump
+}
+
+# text: one subscription per line, "<1|0> <format> <source>". Rewrites the list keys of the blockset
+# config (enabled entries only, one atomic write) and then the subscriptions file. Takes effect on the
+# next list update.
+m_set_subscriptions() {
+	local text en fmt src rest n=0 tmp cfg fail='' wl key vals
 	read -r input
 	json_load "$input"
-	json_get_var key key
-	json_get_var val value
-	json_init
-	case "$key" in
-		raw_block_lists|raw_allow_lists|dnsmasq_block_lists|hosts_block_lists) ;;
-		*) json_add_boolean ok 0; json_add_string error "unknown key"; json_dump; return ;;
-	esac
-	val=$(echo "$val" | tr -s ' \t\n' '   ' | sed 's/^ //; s/ $//')
-	for tok in $val; do
-		case "$tok" in
-			hagezi:*|oisd:*|stevenblack:*|http://*|https://*) ;;
-			*) json_add_boolean ok 0; json_add_string error "unsupported list: $tok"; json_dump; return ;;
-		esac
-		case "$tok" in
-			*[\"\'\`\$\\\;\&\|\<\>]*) json_add_boolean ok 0; json_add_string error "invalid characters in: $tok"; json_dump; return ;;
-		esac
+	json_get_var text text
+	is_busy && { reply_fail "adblock-lean is busy, try again when it has finished"; return; }
+	cfg=$(set_cfg) || { reply_fail "no blockset config"; return; }
+	tmp=$(mktemp "$SUBS_FILE.XXXXXX") || { reply_fail "can not create a temp file in $ABL_CFG_DIR"; return; }
+	while read -r en fmt src rest; do
+		[ -n "$en$fmt$src" ] || continue
+		n=$((n + 1))
+		case "$en" in 0|1) ;; *) fail="line $n: enabled must be 0 or 1"; break ;; esac
+		key_for_format "$fmt" >/dev/null || { fail="line $n: unknown format '$fmt'"; break; }
+		[ -z "$rest" ] || { fail="line $n: unexpected text after the source"; break; }
+		src=$(norm_source "$src")
+		valid_source "$src" "$fmt" || { fail="line $n: unsupported source '$src' for format $fmt"; break; }
+		{ grep -qxF "1 $fmt $src" "$tmp" || grep -qxF "0 $fmt $src" "$tmp"; } && { fail="line $n: duplicate '$src'"; break; }
+		echo "$en $fmt $src" >> "$tmp" || { fail="can not write $tmp"; break; }
+	done <<-EOF
+	$text
+	EOF
+	[ -n "$fail" ] && { rm -f "$tmp"; reply_fail "$fail"; return; }
+	wl=$(cfg_get "$cfg" whitelist_mode)
+	if [ "$wl" = 1 ]; then
+		awk '$1 == "1" { f = 1 } END { exit !f }' "$tmp" || { rm -f "$tmp"; reply_fail "enable at least one list"; return; }
+	else
+		awk '$1 == "1" && $2 != "raw_allow" { f = 1 } END { exit !f }' "$tmp" ||
+			{ rm -f "$tmp"; reply_fail "enable at least one blocklist"; return; }
+	fi
+	for key in $LIST_KEYS; do
+		grep -q "^[[:space:]]*$key=\"" "$cfg" || { rm -f "$tmp"; reply_fail "$key is missing from $cfg"; return; }
 	done
-	grep -q "^$key=\"" "$ABL_CONFIG" || { json_add_boolean ok 0; json_add_string error "$key not in config"; json_dump; return; }
-	sed -i "s|^$key=\".*\"|$key=\"$val\"|" "$ABL_CONFIG"
-	json_add_boolean ok "$([ "$(cfg_get "$key")" = "$val" ] && echo 1 || echo 0)"
+	set --
+	for fmt in $ALL_FORMATS; do
+		key=$(key_for_format "$fmt")
+		vals=$(awk -v f="$fmt" '$1 == "1" && $2 == f { printf "%s%s", s, $3; s = " " }' "$tmp")
+		set -- "$@" "$key=$vals"
+	done
+	cfg_set_many "$cfg" "$@" || { rm -f "$tmp"; reply_fail "could not write $cfg"; return; }
+	mv "$tmp" "$SUBS_FILE" || { rm -f "$tmp"; reply_fail "config saved, but not $SUBS_FILE"; return; }
+	json_init
+	json_add_boolean ok 1
 	json_dump
+}
+
+local_path() {
+	local f p id
+	f=$(set_cfg) || return 1
+	id=$(set_id)
+	p=$(cfg_get "$f" "local_${1}list_path")
+	[ -n "$p" ] || p="$ABL_CFG_DIR/local-${1}list-$id"
+	echo "$p"
+}
+
+m_get_local() {
+	local kind p
+	read -r input
+	json_load "$input"
+	json_get_var kind kind
+	json_init
+	case "$kind" in allow|block) ;; *) json_add_string error "kind must be allow or block"; json_dump; return ;; esac
+	p=$(local_path "$kind") || { json_add_string error "no blockset config"; json_dump; return; }
+	json_add_string path "$p"
+	json_add_string text "$(cat "$p" 2>/dev/null)"
+	json_dump
+}
+
+# Lines are kept as they are when they are comments ('#...') or empty; every other line must be a
+# domain, optionally '*.domain' and with a trailing comment. Nothing is written unless every line is
+# valid. dry_run=1 only validates.
+m_set_local() {
+	local kind text dry p bad tmp cfg
+	read -r input
+	json_load "$input"
+	json_get_var kind kind
+	json_get_var text text
+	json_get_var dry dry_run
+	case "$kind" in allow|block) ;; *) reply_fail "kind must be allow or block"; return ;; esac
+	[ "$dry" = 1 ] || ! is_busy || { reply_fail "adblock-lean is busy, try again when it has finished"; return; }
+	p=$(local_path "$kind") || { reply_fail "no blockset config"; return; }
+	tmp=$(mktemp "$ABL_CFG_DIR/.luci-local.XXXXXX") || { reply_fail "can not create a temp file in $ABL_CFG_DIR"; return; }
+	# one awk pass: keep comment and empty lines, normalise domains ('*.' allowed, trailing dot and
+	# CR dropped, lowercase, trailing comment kept), collect invalid entries, drop trailing empty lines
+	bad=$(printf '%s\n' "$text" | awk -v out="$tmp" '
+		{
+			sub(/\r$/, "")
+			line = $0; c = index(line, "#"); com = ""
+			if (c) { com = substr(line, c); d = substr(line, 1, c - 1) } else d = line
+			gsub(/^[ \t]+|[ \t]+$/, "", d); d = tolower(d); sub(/\.$/, "", d)
+			if (d != "") {
+				dd = d; sub(/^\*\./, "", dd)
+				if (dd !~ /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/ || length(dd) > 253) { bad = bad " " d; next }
+				line = (com != "") ? d " " com : d
+			}
+			a[++n] = line
+			if (line ~ /[^ \t]/) last = n
+		}
+		END {
+			for (i = 1; i <= last; i++) print a[i] > out
+			# close() reports a failed write (e.g. a full overlay); nothing to close when there are no lines
+			if (last && close(out) != 0) exit 2
+			printf "%s", bad
+		}') || { rm -f "$tmp"; reply_fail "can not write $tmp"; return; }
+	[ -n "$bad" ] && { rm -f "$tmp"; reply_fail "not domain names:$bad"; return; }
+	if [ "$dry" = 1 ]; then
+		rm -f "$tmp"
+	else
+		cfg=$(set_cfg)
+		mv "$tmp" "$p" || { rm -f "$tmp"; reply_fail "can not write $p"; return; }
+		chmod 644 "$p"
+		[ "$(cfg_get "$cfg" "local_${kind}list_path")" = "$p" ] ||
+			cfg_set_many "$cfg" "local_${kind}list_path=$p" ||
+			{ reply_fail "saved $p, but could not register it in $cfg"; return; }
+	fi
+	json_init
+	json_add_boolean ok 1
+	json_dump
+}
+
+# schedule: "disable" or a daily cron time "M H * * *" (adblock-lean adds a random delay of up to 60 min).
+# Written to global.conf, then adblock-lean updates its own cron job.
+m_set_schedule() {
+	local sched m h cron
+	read -r input
+	json_load "$input"
+	json_get_var sched schedule
+	is_busy && { reply_fail "adblock-lean is busy, try again when it has finished"; return; }
+	case "$sched" in
+		disable) ;;
+		*)
+			set -f; set -- $sched; set +f
+			m=${1:-x} h=${2:-x}
+			case "$m" in [0-9]|[0-5][0-9]) ;; *) m=x ;; esac
+			case "$h" in [0-9]|[01][0-9]|2[0-3]) ;; *) h=x ;; esac
+			if [ "$m$h" != "${m#x}${h#x}" ] || [ $# -ne 5 ] || [ "$3 $4 $5" != '* * *' ]; then
+				reply_fail "schedule must be 'disable' or 'M H * * *'"; return
+			fi
+			# '05' -> '5', '00' -> '0'
+			m=${m#0}; h=${h#0}
+			sched="${m:-0} ${h:-0} * * *" ;;
+	esac
+	cfg_set_many "$GLOBAL_CFG" "upd_schedule=$sched" || { reply_fail "could not write upd_schedule to $GLOBAL_CFG"; return; }
+	"$ABL_SERVICE" upd_cron_job >/dev/null 2>&1
+	cron=$(crontab -l 2>/dev/null | grep -m1 'adblock-lean' | awk '{print $1,$2,$3,$4,$5}')
+	json_init
+	if [ "$sched" = disable ]; then
+		[ -z "$cron" ]
+	else
+		[ "$cron" = "$sched" ]
+	fi && json_add_boolean ok 1 || { json_add_boolean ok 0; json_add_string error "the cron job does not match ('$cron')"; }
+	json_add_string cron "$cron"
+	json_dump
+}
+
+# Guess the format of a list from its first 64 KB (downloaded by the router).
+# Counts rule lines by syntax; reports the share that adblock-lean can use, so browser-only lists
+# (cosmetic rules, URL parameters, paths) can be recognised before they are added.
+m_detect_format() {
+	local url res
+	read -r input
+	json_load "$input"
+	json_get_var url url
+	url=$(norm_source "$url")
+	case "$url" in http://*|https://*) ;; *) reply_fail "not an http(s) URL"; return ;; esac
+	valid_source "$url" adguard || { reply_fail "unsupported characters in the URL"; return; }
+	res=$(uclient-fetch -q -T 15 -O - "$url" 2>/dev/null | head -c 65536 | awk '
+		{ sub(/\r$/, ""); l = $0; sub(/^[ \t]+/, "", l); sub(/[ \t]+$/, "", l) }
+		l == "" || l ~ /^[!#\[]/ { next }
+		{ n++ }
+		l ~ /^(local|server|address)=\// { dnsmasq++; next }
+		l ~ /^(0\.0\.0\.0|127\.0\.0\.1|::1?)[ \t]+[a-z0-9._-]+$/ { hosts++; next }
+		l ~ /^(@@)?\|\|?[A-Za-z0-9._-]+\^?\|?(\$(important|dnsrewrite=[^,]*)(,(important|dnsrewrite=[^,]*))*)?$/ { adg++; next }
+		l ~ /^[A-Za-z0-9*._-]+$/ && l ~ /\./ { raw++; next }
+		{ other++ }
+		END { printf "%d %d %d %d %d %d", n, adg, hosts, raw, dnsmasq, other }')
+	set -- $res
+	json_init
+	[ "${1:-0}" -gt 0 ] || { json_add_boolean ok 0; json_add_string error "could not download the list or it has no rules"; json_dump; return; }
+	json_add_boolean ok 1
+	json_add_int rules "$1"; json_add_int adguard "$2"; json_add_int hosts "$3"; json_add_int raw "$4"
+	json_add_int dnsmasq "$5"; json_add_int unusable "$6"
+	# the most frequent usable syntax; AdGuard syntax also covers hosts and plain-domain lines
+	if [ $(( $2 + $3 + $4 + $5 )) -eq 0 ]; then json_add_string format none
+	elif [ "$5" -gt "$2" ] && [ "$5" -gt "$3" ] && [ "$5" -gt "$4" ]; then json_add_string format dnsmasq
+	elif [ "$2" -gt 0 ]; then json_add_string format adguard
+	elif [ "$3" -ge "$4" ]; then json_add_string format hosts
+	else json_add_string format raw
+	fi
+	json_dump
+}
+
+# AdGuard's list catalog (the one AdGuard Home shows), cached for a day on the ramdisk
+m_get_catalog() {
+	local f="$CACHE_DIR/catalog.json" age
+	mkdir -p "$CACHE_DIR"
+	age=86401
+	[ -s "$f" ] && age=$(( $(date +%s) - $(date -r "$f" +%s) ))
+	if [ "$age" -gt 86400 ]; then
+		uclient-fetch -q -T 20 -O "$f.tmp" https://adguardteam.github.io/HostlistsRegistry/assets/filters.json 2>/dev/null &&
+			grep -q '"filters"' "$f.tmp" && mv "$f.tmp" "$f" || rm -f "$f.tmp"
+	fi
+	[ -s "$f" ] || { reply_fail "could not download the AdGuard list catalog"; return; }
+	cat "$f"
 }
 
 m_log() {
 	json_init
-	json_add_string session "$(tail -n 200 "$ABL_SESSION_LOG" 2>/dev/null)"
+	json_add_string session "$(sed "s/${ESC}\[[0-9;]*m//g" "$ABL_SESSION_LOG" 2>/dev/null | tail -n 200)"
 	json_add_string syslog "$(logread -e adblock-lean 2>/dev/null | tail -n 50)"
 	json_dump
 }
@@ -264,7 +590,13 @@ case "$1" in
 		json_add_object status; json_close_object
 		json_add_object check; json_add_string domain str; json_close_object
 		json_add_object action; json_add_string name str; json_close_object
-		json_add_object set_lists; json_add_string key str; json_add_string value str; json_close_object
+		json_add_object get_subscriptions; json_close_object
+		json_add_object set_subscriptions; json_add_string text str; json_close_object
+		json_add_object get_local; json_add_string kind str; json_close_object
+		json_add_object set_local; json_add_string kind str; json_add_string text str; json_add_int dry_run 0; json_close_object
+		json_add_object set_schedule; json_add_string schedule str; json_close_object
+		json_add_object detect_format; json_add_string url str; json_close_object
+		json_add_object get_catalog; json_close_object
 		json_add_object log; json_close_object
 		json_dump
 		;;
@@ -273,7 +605,13 @@ case "$1" in
 			status) m_status ;;
 			check) m_check ;;
 			action) m_action ;;
-			set_lists) m_set_lists ;;
+			get_subscriptions) m_get_subscriptions ;;
+			set_subscriptions) m_set_subscriptions ;;
+			get_local) m_get_local ;;
+			set_local) m_set_local ;;
+			set_schedule) m_set_schedule ;;
+			detect_format) m_detect_format ;;
+			get_catalog) m_get_catalog ;;
 			log) m_log ;;
 		esac
 		;;

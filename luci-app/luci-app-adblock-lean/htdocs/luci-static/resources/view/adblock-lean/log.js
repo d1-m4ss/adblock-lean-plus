@@ -1,5 +1,6 @@
 'use strict';
 // SPDX-License-Identifier: GPL-2.0-only
+// Modified in adblock-lean-plus (2026-11): see FORK-NOTES.md for the changes against upstream.
 'require view';
 'require rpc';
 'require poll';
@@ -7,8 +8,11 @@
 
 var callLog = rpc.declare({ object: 'luci.adblock-lean', method: 'log', expect: { '': {} } });
 
+// log text may contain list content (e.g. a 'rogue element'): set it as text, never as HTML
 function pre(id, text) {
-	return E('pre', { 'id': id, 'style': 'white-space:pre-wrap;max-height:30em;overflow:auto;font-size:90%' }, text || _('(empty)'));
+	var el = E('pre', { 'id': id, 'style': 'white-space:pre-wrap;max-height:30em;overflow:auto;font-size:90%' });
+	el.textContent = text || _('(empty)');
+	return el;
 }
 
 return view.extend({
@@ -19,8 +23,8 @@ return view.extend({
 	render: function(lg) {
 		poll.add(function() {
 			return callLog().then(function(l) {
-				dom.content(document.getElementById('abl-session'), l.session || _('(empty)'));
-				dom.content(document.getElementById('abl-syslog'), l.syslog || _('(empty)'));
+				document.getElementById('abl-session').textContent = l.session || _('(empty)');
+				document.getElementById('abl-syslog').textContent = l.syslog || _('(empty)');
 			});
 		}, 10);
 		return E([], [
