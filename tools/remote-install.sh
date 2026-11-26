@@ -265,7 +265,8 @@ enabled=0; [ "$installed" = 1 ] && "$SVC" enabled 2>/dev/null && enabled=1
 luci=0; [ -d /www/luci-static ] && luci=1
 if [ "$luci" = 1 ]; then
 	gui_present=0; [ -f /usr/share/luci/menu.d/luci-app-adblock-lean.json ] && gui_present=1
-	ask GUI 1 "$gui_present" "Install the web pages (LuCI: Services -> Adblock-lean-plus)?"
+	verb=Install; [ "$gui_present" = 0 ] || verb=Update
+	ask GUI 1 "$gui_present" "$verb the web pages (LuCI: Services -> Adblock-lean-plus)?"
 else
 	[ "$GUI" = 1 ] || [ "$DOH_GUI" = 1 ] && die "--gui/--doh-gui: LuCI is not installed"
 	GUI=0 DOH_GUI=0
@@ -319,7 +320,7 @@ else
 	USE_DOH=0
 fi
 if [ "$USE_DOH" = 0 ] && local_only && [ -n "$(ntp_missing)" ]; then
-	say "    the time server names ($(ntp_missing | tr '\n' ' ')) are resolved only through the local proxies: after a long"
+	say "    the time server names ($(echo $(ntp_missing))) are resolved only through the local proxies: after a long"
 	say "    power cut the router may fail to set its clock, and encrypted DNS then fails too"
 	ask NTPFIX 1 0 "Resolve the time server names over plain DNS?"
 fi
@@ -353,16 +354,32 @@ else
 	ask ENABLE 1 0 "Start automatically at boot and update the lists daily?"
 fi
 
-step "Plan"
-say "  blocker:                 $([ "$installed" = 1 ] && echo upgrade || echo install)"
-say "  web pages:               $(yn "$GUI")"
-say "  install DoH proxies:     $(yn "$DOH")$([ "$DOH_GUI" = 1 ] && echo ' (with LuCI page)')"
-say "  dnsmasq -> DoH proxies:  $(yn "$USE_DOH")"
-[ "$NTPFIX" = 1 ] && say "  time servers over DNS:   plain"
-[ "$have_cfg" = 0 ] && say "  blocklists:              preset '$PRESET'${LISTS:+ + AdGuard lists}, on flash: $(yn "$PERSIST")"
-say "  speed-up tools:          $([ "$UTILS" = 1 ] && echo "${missing_utils# }" || echo no)"
-boot=$(yn "$ENABLE"); [ "$enabled" = 1 ] && boot='yes (already enabled)'
-say "  start now / at boot:     $(yn "$START") / $boot"
+step "Plan: what will be done now"
+# a part that is already in place says so; "skipped" is a part that is absent and stays so
+row() { printf '  %-20s %s\n' "$1:" "$2"; }
+row "adblock-lean-plus" "$([ "$installed" = 1 ] && echo 'upgrade, settings kept' || echo install)"
+if [ "$GUI" = 1 ]; then t=install; [ "${gui_present:-0}" = 0 ] || t=update
+elif [ "${gui_present:-0}" = 1 ]; then t='installed, not updated'
+else t=skipped; fi
+row "web pages" "$t"
+if [ "$doh_present" = 1 ]; then t='already installed, kept'; [ "$DOH_GUI" != 1 ] || t="$t; add its LuCI page"
+elif [ "$DOH" = 1 ]; then t=install; [ "$DOH_GUI" != 1 ] || t='install, with the LuCI page'
+else t=skipped; fi
+row "DoH proxies" "$t"
+if [ "$USE_DOH" = 1 ]; then t='switch to the DoH proxies'
+elif { [ "$DOH" = 1 ] || [ "$doh_present" = 1 ]; } && uses_doh; then t='already the DoH proxies'
+else t=unchanged; fi
+row "dnsmasq upstreams" "$t"
+[ "$NTPFIX" != 1 ] || row "time server names" "add a plain-DNS exception"
+[ "$have_cfg" = 1 ] || row "blocklists" "preset '$PRESET'${LISTS:+ + AdGuard lists}, kept on flash: $(yn "$PERSIST")"
+if [ -z "$missing_utils" ]; then t='already installed'
+elif [ "$UTILS" = 1 ]; then t="install $(echo $missing_utils)"
+else t=skipped; fi
+row "speed-up tools" "$t"
+t=$(yn "$START"); [ "${UNASKED_START:-0}" != 1 ] || t='not now (not asked)'
+row "start now" "$t"
+if [ "$enabled" = 1 ]; then t='already enabled'; else t=$(yn "$ENABLE"); [ "${UNASKED_ENABLE:-0}" != 1 ] || t='not now (not asked)'; fi
+row "start at boot" "$t"
 
 need_kb=6000
 [ "$PERSIST" = 1 ] && need_kb=$((need_kb + 15000))
@@ -399,6 +416,8 @@ if [ "$DOH" = 1 ]; then
 	pkg_add $pkgs || die "installing $pkgs failed"
 	# the package's own default config, saved next to ours, is not needed
 	[ "$new_cfg" = 1 ] && rm -f "$DOH_CFG.apk-new" "$DOH_CFG-opkg"
+	# so that the uninstaller knows the proxies are ours, even after their settings were edited
+	[ "$doh_present" = 1 ] || { mkdir -p "$CFG" && : > "$CFG/doh-added-by-installer"; }
 	/etc/init.d/https-dns-proxy enabled || /etc/init.d/https-dns-proxy enable
 	/etc/init.d/https-dns-proxy running >/dev/null 2>&1 || /etc/init.d/https-dns-proxy start >/dev/null 2>&1
 fi
@@ -416,6 +435,11 @@ done
 cp "$STAGE/adblock-lean/etc/adblock-lean/99-abl-hotplug.sh" "$CFG/" || die "can not write $CFG"
 md5sum "$SVC" /usr/lib/adblock-lean/abl-lib.sh /usr/lib/adblock-lean/abl-process.sh \
 	/usr/lib/adblock-lean/abl-manage.sh /usr/lib/adblock-lean/abl-scheduler.sh > "$CFG/abl-reg.md5" || die "can not register files"
+# the update and uninstall commands; replaced with a rename, as the update command may be the one running
+for c in get.sh:adblock-lean-plus-update uninstall.sh:adblock-lean-plus-uninstall; do
+	t=/usr/sbin/${c#*:}
+	cp "$STAGE/${c%:*}" "$t.new" && chmod 755 "$t.new" && mv "$t.new" "$t" || die "can not install $t"
+done
 say "  installed $(sed -n 's/^ABL_VERSION=//p' "$SVC")"
 
 step "Configuration"
@@ -487,7 +511,7 @@ if [ "$START" = 1 ]; then
 		failed="$failed start"
 	fi
 fi
-if [ "$ENABLE" = 1 ]; then
+if [ "$ENABLE" = 1 ] && [ "$enabled" != 1 ]; then
 	if DO_DIALOGS=0 "$SVC" enable; then say "  enabled at boot"; else say "  WARNING: enable failed"; failed="$failed enable"; fi
 fi
 cleanup
@@ -513,4 +537,6 @@ case " $failed " in
 				fi
 		esac
 esac
+say "  to update:            adblock-lean-plus-update"
+say "  to uninstall:         adblock-lean-plus-uninstall"
 [ "$port" = 53 ] || say "  dnsmasq '$INSTANCE' listens on port $port: clients get filtering only once it answers on port 53 (README: If you already run AdGuard Home)"

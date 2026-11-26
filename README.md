@@ -99,49 +99,22 @@ Rendered from this repository's view files with data captured from a router runn
 
 ## 🚀 Install, update, uninstall
 
-All commands run **on the router** (`ssh root@192.168.1.1`). `git` is not needed.
+All three are one command **on the router** (`ssh root@192.168.1.1`). Nothing else is needed: no `git`, no unpacking.
 
 ### Install
 
-**1. Download** (`/tmp` is in RAM: the files disappear on reboot):
-
 ```sh
-rm -rf /tmp/ablp && mkdir /tmp/ablp && cd /tmp/ablp
-wget -O ablp.tar.gz https://codeload.github.com/d1-m4ss/adblock-lean-plus/tar.gz/refs/heads/main
-tar -xzf ablp.tar.gz && cd adblock-lean-plus-main
+wget -qO /tmp/get.sh https://raw.githubusercontent.com/d1-m4ss/adblock-lean-plus/main/get.sh && sh /tmp/get.sh
 ```
 
-**2. Run the installer** and answer its questions:
-
-```sh
-sh install.sh
-```
-
-It looks at the router first and asks about each part (Enter takes the suggested answer): the web pages, the DoH
-proxies, pointing dnsmasq at them, the blocklist options, speed-up tools, start now and at boot. If it finds another
-DNS resolver (AdGuard Home, stubby, unbound, …) or `https-dns-proxy` already installed, it says so and suggests
-leaving your DNS setup alone. **Nothing changes before you confirm the plan.**
-
-`sh install.sh --dry-run` only shows the plan; `sh install.sh -y` takes every suggested answer.
-
-> 💡 Use the `codeload.github.com` address as written: with `github.com/...` links OpenWrt's `wget` (uclient-fetch)
-> hangs until it times out, because GitHub sends a response header longer than it can read.
-
-<details>
-<summary><b>The router can not download from GitHub, or you prefer to install from your computer</b></summary>
-
-- Download the archive on your computer, copy it with `scp -O ablp.tar.gz root@192.168.1.1:/tmp/`, then on the router
-  run the commands above with `mv /tmp/ablp.tar.gz .` instead of `wget`. If the unpacked directory has another name,
-  `cd` into it.
-- Or unpack the archive on your computer (macOS or Linux) and run `./install.sh [options] root@192.168.1.1`; it copies
-  the files over SSH. SSH options go in `SSH_OPTS`, e.g. `SSH_OPTS="-p 2222" ./install.sh ...`.
-
-</details>
+It downloads the latest version and starts the installer, which looks at the router, asks about each part (Enter takes
+the suggested answer) and shows the plan. **Nothing changes before you confirm it.** If it finds another DNS resolver
+(AdGuard Home, stubby, unbound, …) or `https-dns-proxy` already installed, it suggests leaving your DNS setup alone.
 
 <details>
 <summary><b>All installer options</b></summary>
 
-Options answer the questions in advance. Without a terminal (and without `-y`) only what the options ask for is
+Options answer the questions in advance, e.g. `sh /tmp/get.sh --gui --doh`. Without a terminal (and without `-y`) only what the options ask for is
 done.
 
 | Option | What it does |
@@ -163,105 +136,68 @@ done.
 
 </details>
 
-### Update
+<details>
+<summary><b>The router can not download from GitHub, or you prefer to install from your computer</b></summary>
 
-Blocklists update by themselves (once a day between 05:00 and 06:00 once enabled). The plugin is updated by running the new installer
-over the old installation; lists, names, local allow/block entries, schedule and DNS settings are kept.
-
-**1. Download** as in [Install](#install), step 1. **2. Run:**
+Download [the archive](https://codeload.github.com/d1-m4ss/adblock-lean-plus/tar.gz/refs/heads/main) on your computer,
+unpack it and run in its directory (macOS or Linux; it copies the files over SSH, extra SSH options go in `SSH_OPTS`):
 
 ```sh
-sh install.sh --upgrade
+./install.sh root@192.168.1.1
 ```
 
-- It asks about anything that can be added to your setup (web pages, speed-up tools, a plain-DNS exception for the
-  time servers, …), shows the plan and waits for your confirmation.
-- Answer yes to "Download the lists and start blocking now?": adblock-lean restarts with the new scripts (1–3
-  minutes; DNS pauses for a few seconds when the new list is loaded).
-- Web pages: log out of LuCI and back in. If the old page still shows, reload it without the browser cache (Ctrl+F5,
-  on a Mac Cmd+Shift+R).
-- Check: `/etc/init.d/adblock-lean status`.
-- Also possible: `--dry-run` only shows the plan, `-y` takes every suggested answer; from your computer,
-  `./install.sh --upgrade root@192.168.1.1` in the unpacked archive.
+</details>
+
+### Update
+
+```sh
+adblock-lean-plus-update
+```
+
+Lists, names, local allow/block entries, schedule and DNS settings are kept. Answer yes to starting now (1–3 minutes;
+DNS pauses for a few seconds), then log out of LuCI and back in (old page still there: reload without the browser
+cache, Ctrl+F5 or Cmd+Shift+R).
+
+"not found"? An older version is installed: run the [Install](#install) command once, it offers to upgrade.
+
+Blocklists need no command: they update by themselves once a day between 05:00 and 06:00.
+
+### Uninstall
+
+```sh
+adblock-lean-plus-uninstall
+```
+
+It asks whether to keep your settings and whether to remove the DoH proxies (suggested if the installer added them),
+shows the plan and waits for your confirmation. Before the proxies go, dnsmasq gets the DNS servers of your internet
+connection back (or `1.1.1.1` if there are none); if DNS would stop working, nothing is removed.
+
+| Option | What it does |
+|---|---|
+| `-y`, `--yes` | ask nothing: remove the blocker, its settings, the web pages and the DoH proxies the installer added |
+| `--keep-settings` | keep `/etc/adblock-lean` for a later install |
+| `--keep-doh` / `--remove-doh` | keep the DoH proxies and DNS settings / remove them even if the installer did not add them |
+| `--dry-run` | show the plan; change nothing |
+
+The speed-up tools (gawk, sed, coreutils-sort) are ordinary OpenWrt packages and stay installed.
 
 <details>
 <summary><b>After an OpenWrt firmware upgrade</b></summary>
 
 Upgrade OpenWrt with Attended Sysupgrade (LuCI: System → Attended Sysupgrade, or `owut`), which builds an image that
-includes your installed packages. A plain `sysupgrade` that keeps the settings drops added packages such as
-`https-dns-proxy` while dnsmasq still forwards to it, so DNS stops working; if that happened, run step 1 of
-[Uninstall](#uninstall) to give dnsmasq other servers.
+includes your installed packages. Then run `adblock-lean-plus-update`: the web pages are not kept by a firmware
+upgrade. While "start at boot" is on, the scripts, settings and these commands are kept; with it off nothing is: save a
+[backup](#backup-and-import) first and install again afterwards.
 
-While "start at boot" is on, `sysupgrade` keeps adblock-lean's scripts and settings (listed in
-`/lib/upgrade/keep.d`), but not the web pages: run the installer again as above. With "start at boot" off nothing of
-adblock-lean is kept: download a [backup](#backup-and-import) first and install again afterwards.
-
-</details>
-
-### Uninstall
-
-Optional: save a [backup](#backup-and-import) first. Run the steps in this order.
-
-**1. Give dnsmasq other DNS servers.** Needed only if it forwards to the DoH proxies, that is, if
-`uci get dhcp.@dnsmasq[0].server` shows `127.0.0.1#5053`…`5055`; otherwise go to step 2. Without this step DNS stops
-when the proxies are removed. (With several dnsmasq instances, see `uci show dhcp | grep =dnsmasq` and use the
-filtered one instead of `@dnsmasq[0]`.)
+A plain `sysupgrade` that keeps the settings drops added packages such as `https-dns-proxy` while dnsmasq still
+forwards to it, so DNS stops working. Give dnsmasq the internet connection's DNS back, then update:
 
 ```sh
 for p in 5053 5054 5055; do uci -q del_list dhcp.@dnsmasq[0].server="127.0.0.1#$p"; done
-for ip in 1.1.1.1 1.0.0.1; do uci -q del_list dhcp.@dnsmasq[0].server="/pool.ntp.org/$ip"; done
-uci -q delete dhcp.@dnsmasq[0].noresolv
-uci commit dhcp && /etc/init.d/dnsmasq restart
+uci -q delete dhcp.@dnsmasq[0].noresolv; uci commit dhcp; /etc/init.d/dnsmasq restart
 ```
 
-Now dnsmasq uses the DNS servers of your internet connection. **Check it, and do not continue unless it answers**
-(give dnsmasq a few seconds to load the blocklist):
-
-```sh
-nslookup openwrt.org 127.0.0.1
-```
-
-No answer (your connection provides no DNS servers)? Add one, then check again:
-
-```sh
-uci add_list dhcp.@dnsmasq[0].server='1.1.1.1' && uci commit dhcp && /etc/init.d/dnsmasq restart
-```
-
-**2. Remove the blocker and its settings** (scripts, lists, saved blocklist, boot and cron entries, dnsmasq
-`addnmount` entries):
-
-```sh
-DO_DIALOGS=0 luci_uninstall_rm_config=y /etc/init.d/adblock-lean uninstall
-```
-
-To keep the settings in `/etc/adblock-lean`, run `/etc/init.d/adblock-lean uninstall` instead and answer `n`.
-
-**3. Remove the web pages:**
-
-```sh
-rm -rf /usr/libexec/rpcd/luci.adblock-lean /usr/share/rpcd/acl.d/luci-app-adblock-lean.json \
-  /usr/share/luci/menu.d/luci-app-adblock-lean.json /www/luci-static/resources/view/adblock-lean \
-  /var/run/luci-adblock-lean /tmp/luci-indexcache* /tmp/luci-modulecache
-/etc/init.d/rpcd reload
-```
-
-**4. Remove the DoH proxies**, if the installer added them (skip this if you used `https-dns-proxy` before):
-
-```sh
-apk del luci-app-https-dns-proxy      # opkg: opkg remove luci-app-https-dns-proxy
-apk del https-dns-proxy               # opkg: opkg remove https-dns-proxy
-rm -f /etc/config/https-dns-proxy*
-```
-
-**Check** that DNS works and nothing is left (only the `nslookup` answer should show):
-
-```sh
-nslookup openwrt.org 127.0.0.1
-ls -d /etc/init.d/adblock-lean* /etc/adblock-lean /usr/lib/adblock-lean 2>/dev/null
-uci show dhcp | grep -E 'addnmount|127.0.0.1#505'; crontab -l 2>/dev/null | grep adblock
-```
-
-The speed-up tools (gawk, sed, coreutils-sort) are ordinary OpenWrt packages and stay installed.
+</details>
 
 ## 🔁 If you already run AdGuard Home
 
@@ -314,10 +250,10 @@ rm -rf /etc/adguardhome /var/lib/adguardhome   # config and work dir (query log)
 
 ### 4. Install adblock-lean-plus
 
-On the router, download and unpack as in [Install](#install), then:
+On the router:
 
 ```sh
-sh install.sh
+wget -qO /tmp/get.sh https://raw.githubusercontent.com/d1-m4ss/adblock-lean-plus/main/get.sh && sh /tmp/get.sh
 ```
 
 Answer yes to the DoH proxies and to pointing dnsmasq at them, add your lists from step 1 on the
@@ -326,7 +262,7 @@ block it), normal sites resolve.
 
 **No-gap variant:** install while AGH still answers (the lists load into dnsmasq on its other port): answer yes to
 starting now, and no to pointing dnsmasq at the DoH proxies if AGH forwards to dnsmasq. Then do steps 2–3 and, if you
-skipped it, run `sh install.sh --upgrade --use-doh`; filtering starts the moment dnsmasq takes port 53.
+skipped it, run `adblock-lean-plus-update --use-doh`; filtering starts the moment dnsmasq takes port 53.
 
 ## 🔧 How it works
 

@@ -6,6 +6,7 @@
 'require ui';
 'require poll';
 'require dom';
+'require view.adblock-lean.names as listnames';
 
 var callStatus = rpc.declare({ object: 'luci.adblock-lean', method: 'status', expect: { '': {} } });
 var callAction = rpc.declare({ object: 'luci.adblock-lean', method: 'action', params: [ 'name' ], expect: { '': {} } });
@@ -13,6 +14,7 @@ var callCheck = rpc.declare({ object: 'luci.adblock-lean', method: 'check', para
 var callSetSchedule = rpc.declare({ object: 'luci.adblock-lean', method: 'set_schedule', params: [ 'schedule' ], expect: { '': {} } });
 var callGetSubs = rpc.declare({ object: 'luci.adblock-lean', method: 'get_subscriptions', expect: { '': {} } });
 var callSetSubs = rpc.declare({ object: 'luci.adblock-lean', method: 'set_subscriptions', params: [ 'text', 'dry_run' ], expect: { '': {} } });
+var callCatalog = rpc.declare({ object: 'luci.adblock-lean', method: 'get_catalog', expect: { '': {} } });
 var callGetLocal = rpc.declare({ object: 'luci.adblock-lean', method: 'get_local', params: [ 'kind' ], expect: { '': {} } });
 var callSetLocal = rpc.declare({ object: 'luci.adblock-lean', method: 'set_local', params: [ 'kind', 'text', 'dry_run' ], expect: { '': {} } });
 
@@ -198,6 +200,41 @@ return view.extend({
 		});
 	},
 
+	// the names the user gave to lists, then those of AdGuard's catalog; shown once loaded
+	loadNames: function() {
+		var self = this;
+		return callGetSubs().then(function(r) {
+			var own = Object.create(null);
+			(r.subscriptions || []).forEach(function(s) { if (s.title) own[s.source] = s.title; });
+			self.ownNames = own;
+			var unnamed = ((self.status || {}).lists || []).some(function(l) {
+				return /^https?:/.test(l.name) && !own[l.name] && !listnames.name(l.name);
+			});
+			if (unnamed)
+				return callCatalog().then(function(c) { listnames.remember(c); });
+		}).then(function() {
+			var box = document.getElementById('abl-lists');
+			if (box && self.status)
+				dom.content(box, self.renderLists(self.status));
+		}).catch(function() {
+			// without the names the table still shows the addresses
+		});
+	},
+
+	// every list the same way: its name in bold and its address (or file) below
+	listCell: function(source) {
+		var local = source.indexOf('/') === 0, name;
+		if (local)
+			name = /\/local-allowlist/.test(source) ? _('Your allowlist') : /\/local-blocklist/.test(source) ? _('Your blocklist') : _('Local list');
+		else
+			name = (this.ownNames && this.ownNames[source]) || listnames.name(source);
+		// text nodes: names and addresses come from files and downloads
+		return E('td', { 'class': 'td', 'style': 'word-break:break-all' }, [
+			name ? E('div', {}, E('strong', {}, document.createTextNode(name))) : '',
+			E('div', { 'style': name ? 'font-size:90%;opacity:.75' : '' }, document.createTextNode(source))
+		]);
+	},
+
 	renderLists: function(st) {
 		if (!st.lists || !st.lists.length)
 			return E('p', { 'class': 'cbi-value-description' }, _('No per-list figures yet. They appear after the next list update.'));
@@ -207,10 +244,10 @@ return view.extend({
 			E('th', { 'class': 'th right' }, _('Entries')),
 			E('th', { 'class': 'th right' }, _('Download size'))
 		]) ];
+		var self = this;
 		st.lists.forEach(function(l) {
-			var local = l.name.indexOf('/') === 0;
 			rows.push(E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td', 'style': 'word-break:break-all' }, local ? E('em', {}, document.createTextNode(l.name.replace('/etc/adblock-lean/', _('local ')))) : document.createTextNode(l.name)),
+				self.listCell(l.name),
 				E('td', { 'class': 'td right' }, fmtInt(l.lines)),
 				E('td', { 'class': 'td right' }, l.size.replace(/\s+/g, ' '))
 			]));
@@ -354,6 +391,7 @@ return view.extend({
 		})
 		.then(function() {
 			self.schedulePick = null;
+			self.loadNames();
 			ui.showModal(_('Settings imported'), [
 				E('p', {}, _('The lists take effect with the next list update.')),
 				E('div', { 'class': 'right' }, [
@@ -414,6 +452,7 @@ return view.extend({
 	refresh: function() {
 		var self = this;
 		return callStatus().then(function(st) {
+			self.status = st;
 			// do not rebuild the status table while the schedule selector has focus (open or being changed);
 			// an unapplied pick is kept by renderSchedule() when the table is rebuilt
 			var sel = document.getElementById('abl-schedule');
@@ -471,6 +510,9 @@ return view.extend({
 			])
 		]);
 
+		this.status = st;
+		var self = this;
+		window.setTimeout(function() { self.loadNames(); }, 0);
 		poll.add(L.bind(this.refresh, this), 5);
 		return view;
 	},

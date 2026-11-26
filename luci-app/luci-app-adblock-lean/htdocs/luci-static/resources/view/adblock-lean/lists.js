@@ -6,6 +6,7 @@
 'require rpc';
 'require ui';
 'require dom';
+'require view.adblock-lean.names as listnames';
 
 var callGetSubs = rpc.declare({ object: 'luci.adblock-lean', method: 'get_subscriptions', expect: { '': {} } });
 var callSetSubs = rpc.declare({ object: 'luci.adblock-lean', method: 'set_subscriptions', params: [ 'text' ], expect: { '': {} } });
@@ -15,46 +16,7 @@ var callAction = rpc.declare({ object: 'luci.adblock-lean', method: 'action', pa
 var callDetect = rpc.declare({ object: 'luci.adblock-lean', method: 'detect_format', params: [ 'url' ], expect: { '': {} } });
 var callCatalog = rpc.declare({ object: 'luci.adblock-lean', method: 'get_catalog', expect: { '': {} } });
 
-var AG = 'https://adguardteam.github.io/HostlistsRegistry/assets/';
-
-// Ready-made subscriptions, grouped. HaGeZi lists use adblock-lean's short ids (plain-domain 'wildcard'
-// lists, no conversion needed: faster updates than the AdGuard-syntax versions of the same lists).
-// Browser-only lists (cosmetic rules, URL parameters, paths) are not offered: DNS can not apply them.
-var PRESETS = [
-	[ _('AdGuard'), [
-		[ _('AdGuard DNS filter'), 'adguard', AG + 'filter_1.txt' ],
-		[ _('AdGuard DNS Popup Hosts filter'), 'adguard', AG + 'filter_59.txt' ]
-	] ],
-	[ _('HaGeZi: ads, trackers'), [
-		[ _('HaGeZi Light'), 'raw', 'hagezi:light' ],
-		[ _('HaGeZi Multi (normal)'), 'raw', 'hagezi:multi' ],
-		[ _('HaGeZi Pro mini'), 'raw', 'hagezi:pro.mini' ],
-		[ _('HaGeZi Pro'), 'raw', 'hagezi:pro' ],
-		[ _('HaGeZi Pro++'), 'raw', 'hagezi:pro.plus' ],
-		[ _('HaGeZi Ultimate'), 'raw', 'hagezi:ultimate' ],
-		[ _('HaGeZi Pop-up ads'), 'raw', 'hagezi:popupads' ],
-		[ _('HaGeZi Native: Apple'), 'raw', 'hagezi:native.apple' ],
-		[ _('HaGeZi Native: Samsung'), 'raw', 'hagezi:native.samsung' ],
-		[ _('HaGeZi Native: Windows/Office'), 'raw', 'hagezi:native.winoffice' ],
-		[ _('HaGeZi Native: Xiaomi'), 'raw', 'hagezi:native.xiaomi' ],
-		[ _('HaGeZi Native: Amazon'), 'raw', 'hagezi:native.amazon' ]
-	] ],
-	[ _('Security'), [
-		[ _('HaGeZi Threat Intelligence (mini)'), 'raw', 'hagezi:tif.mini' ],
-		[ _('HaGeZi Threat Intelligence (medium)'), 'raw', 'hagezi:tif.medium' ],
-		[ _('HaGeZi Threat Intelligence (full, ~1.1M domains, ~110 MB RAM)'), 'raw', 'hagezi:tif' ],
-		[ _('HaGeZi Fake (scams, fake shops)'), 'raw', 'hagezi:fake' ],
-		[ _('HaGeZi Encrypted DNS/VPN/Proxy bypass'), 'raw', 'hagezi:doh-vpn-proxy-bypass' ],
-		[ _('HaGeZi Gambling'), 'raw', 'hagezi:gambling' ],
-		[ _('HaGeZi High-Entropy NRDs, 7 days (~560k domains, yokoffing pick)'), 'adguard', 'https://raw.githubusercontent.com/hagezi/nrd/main/adblock/dga7.txt' ],
-		[ _("Dandelion Sprout's Anti-Malware List (yokoffing pick)"), 'adguard', 'https://raw.githubusercontent.com/DandelionSprout/adfilt/master/Alternate%20versions%20Anti-Malware%20List/AntiMalwareAdGuardHome.txt' ]
-	] ],
-	[ _('All-purpose'), [
-		[ _('HaGeZi combo ALT-SUGGESTED-MINI, top-N (Ultimate mini + TIF mini + more; yokoffing pick)'), 'adguard', 'https://raw.githubusercontent.com/cbuijs/hagezi/refs/heads/main/combo/alt-suggested-mini/domains.top-n.adblock' ],
-		[ _('OISD big'), 'raw', 'oisd:big' ],
-		[ _('StevenBlack hosts'), 'hosts', 'stevenblack:base' ]
-	] ]
-];
+var PRESETS = listnames.PRESETS;
 
 // text goes into .value, never through innerHTML
 function textarea(id, text) {
@@ -77,20 +39,6 @@ var FORMATS = [
 	[ 'hosts', _('Hosts (0.0.0.0 domain)') ],
 	[ 'raw_allow', _('Allowlist (domains)') ]
 ];
-
-function presetName(source) {
-	var all = allPresets(), m;
-	for (var i = 0; i < all.length; i++)
-		if (all[i][2] === source)
-			return all[i][0];
-	// AdGuard-syntax URL of a HaGeZi list that also has a short id
-	m = source.match(/hagezi\/dns-blocklists(@latest|\/main|\/refs\/heads\/main)?\/adblock\/([a-z0-9.-]+)\.txt$/);
-	if (m)
-		for (var j = 0; j < all.length; j++)
-			if (all[j][2] === 'hagezi:' + m[2])
-				return all[j][0] + _(' (AdGuard syntax)');
-	return null;
-}
 
 // what a list source and a list name may look like (the router checks the same)
 var SOURCE = /^(?=.{1,500}$)(https?:\/\/[A-Za-z0-9._~:\/?%+@,-]+|(hagezi|oisd|stevenblack):[A-Za-z0-9._-]+)$/;
@@ -130,23 +78,12 @@ function cleanName(text) {
 
 // show the automatic name (preset, catalog) as text, otherwise the field for the user's own name
 function showName(tr) {
-	var auto = listName(tr.querySelector('.abl-src').value.trim()),
+	var auto = listnames.name(tr.querySelector('.abl-src').value.trim()),
 	    label = tr.querySelector('.abl-name'), own = tr.querySelector('.abl-title');
 	var useAuto = !!auto && !own.value.trim();
 	label.textContent = useAuto ? auto : '';
 	label.style.display = useAuto ? '' : 'none';
 	own.style.display = useAuto ? 'none' : '';
-}
-
-// names of AdGuard's catalog, by download URL; filled once the catalog is loaded
-var catalogNames = {};
-
-function listName(source) {
-	return presetName(source) || (Object.prototype.hasOwnProperty.call(catalogNames, source) ? catalogNames[source] : null);
-}
-
-function rememberNames(c) {
-	(c.filters || []).forEach(function(f) { catalogNames[f.downloadUrl] = f.name; });
 }
 
 // Guess the format from the URL; null = keep what the user picked. 'dnsmasq' = not supported.
@@ -170,7 +107,7 @@ return view.extend({
 	// show the names of listed subscriptions that are not presets (added from the catalog or by URL)
 	loadNames: function() {
 		return callCatalog().then(function(c) {
-			rememberNames(c);
+			listnames.remember(c);
 			Array.prototype.forEach.call(document.querySelectorAll('#abl-subs tr.abl-sub'), showName);
 		});
 	},
@@ -231,7 +168,7 @@ return view.extend({
 		var customName = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'id': 'abl-custom-name', 'maxlength': 80, 'placeholder': _('Name (optional)') });
 
 		// after the page is shown: the router may have to download the catalog first
-		if ((subs.subscriptions || []).some(function(s) { return /^https?:/.test(s.source) && !presetName(s.source); }))
+		if ((subs.subscriptions || []).some(function(s) { return /^https?:/.test(s.source) && !listnames.preset(s.source); }))
 			window.setTimeout(function() { self.loadNames(); }, 0);
 
 		return E([], [
@@ -309,7 +246,7 @@ return view.extend({
 				document.getElementById('abl-custom-fmt').value = fmt;
 			// the user's name; else the automatic one (preset, catalog) or the title from the list itself
 			var nameInput = document.getElementById('abl-custom-name'),
-			    name = nameInput.value.trim() || (listName(src) ? '' : cleanName(r.ok && r.title));
+			    name = nameInput.value.trim() || (listnames.name(src) ? '' : cleanName(r.ok && r.title));
 			self.addSub(document.getElementById('abl-custom-fmt').value, src, name);
 			input.value = '';
 			nameInput.value = '';
@@ -325,7 +262,7 @@ return view.extend({
 				note(c.error || _('Could not load the AdGuard list catalog'), 'error');
 				return;
 			}
-			rememberNames(c);
+			listnames.remember(c);
 			var groups = (c.groups || []).slice().sort(function(a, b) { return a.displayNumber - b.displayNumber; });
 			var body = groups.map(function(g) {
 				var items = c.filters.filter(function(f) { return f.groupId === g.groupId && !f.deprecated; })

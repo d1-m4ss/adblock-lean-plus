@@ -6,7 +6,8 @@ Works with the adblock-lean fork in `../adblock-lean` (upstream `next-version` l
 ## Changes against upstream
 
 - **Name**: the pages are titled `Adblock-lean-plus` (menu, headings); service, paths and ubus object keep the upstream names.
-- **List names**: subscriptions that are not presets get their name from the AdGuard catalog. For any other URL the user
+- **List names** (`view/adblock-lean/names.js`, both pages): every list shows a name and its address; presets are named
+  locally, other subscriptions from the AdGuard catalog. For any other URL the user
   can give a name (prefilled from the list's `Title:` header); it is stored after the source in `luci-subscriptions`.
 - **Input limits**: sources are an `http(s)` URL (≤ 500, `A-Za-z0-9._~:/?%+@,-`) or a short id; names ≤ 80 characters
   with only `. , : ' ( ) / + & _ -` as ASCII punctuation. Local lists: domains only, comments with the same set plus

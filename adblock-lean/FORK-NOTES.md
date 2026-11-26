@@ -18,6 +18,11 @@ Base: upstream `lynxthecat/adblock-lean`, branch `next-version`, commit `1c1346e
 | `ABL_UPD_CHANNEL=local-fork`: upstream update check off, `update` refuses to run (it would replace the fork) | — | `adblock-lean` |
 | Tests: `tests/test-list-conv.sh` (run with busybox: `sh tests/test-list-conv.sh`) | — | `tests/` |
 
+## Installer commands in the sysupgrade keep-file
+
+`adblock-lean-plus-update`, `adblock-lean-plus-uninstall` and the installer's DoH marker are listed in
+`/lib/upgrade/keep.d/adblock-lean`, so they survive a firmware upgrade.
+
 ## First start with a managed persistent blockset
 
 A missing persistent blockset file at `start` in `managed` mode is normal (first start, after `sysupgrade`) and is

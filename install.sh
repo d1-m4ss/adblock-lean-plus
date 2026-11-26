@@ -28,6 +28,7 @@
 #   --upgrade      replace the scripts of an existing installation (settings are kept)
 #   --dry-run      check the router and print the plan; change nothing
 # Without a terminal and without --yes, only what the options ask for is done.
+# Simplest on the router: get.sh downloads and runs this. Later: adblock-lean-plus-update, adblock-lean-plus-uninstall.
 # SSH: one connection is reused for all steps (ControlMaster); extra options in SSH_OPTS.
 #
 # The installer never changes dnsmasq's port and never touches the firewall (README,
@@ -76,7 +77,7 @@ case "$LISTS" in ''|adguard) ;; *) echo "--lists: only 'adguard' is supported" >
 case "$PRESET" in ''|mini|small|medium|large|huge) ;; *) echo "--preset: mini, small, medium, large or huge" >&2; exit 1 ;; esac
 case "$INSTANCE" in *[!A-Za-z0-9_]*) echo "--instance: letters, digits and _ only" >&2; exit 1 ;; esac
 
-FILES="adblock-lean/adblock-lean adblock-lean/usr adblock-lean/etc luci-app/luci-app-adblock-lean/root luci-app/luci-app-adblock-lean/htdocs config/https-dns-proxy tools/remote-install.sh"
+FILES="adblock-lean/adblock-lean adblock-lean/usr adblock-lean/etc luci-app/luci-app-adblock-lean/root luci-app/luci-app-adblock-lean/htdocs config/https-dns-proxy tools/remote-install.sh get.sh uninstall.sh"
 for f in $FILES; do
 	[ -e "$HERE/$f" ] || { echo "missing $f: run install.sh from a full checkout" >&2; exit 1; }
 done
