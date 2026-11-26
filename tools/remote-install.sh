@@ -1,6 +1,7 @@
 #!/bin/sh
 # Router side of install.sh (BusyBox ash). Arguments: KEY=VALUE pairs from install.sh.
-# install.sh copies the files to /tmp/adblock-lean-plus-install and runs this script from there.
+# install.sh runs it from the unpacked repository (on the router), or copies the files to
+# /tmp/adblock-lean-plus-install over SSH and runs it from there.
 set -u
 GUI=0 DOH=0 DOH_GUI=0 INSTANCE='' PRESET='' LISTS='' PERSIST=0 START=0 ENABLE=0 UPGRADE=0 DRY=0
 for kv in "$@"; do
@@ -190,4 +191,4 @@ if [ "$DOH" = 1 ]; then
 	say "    uci commit dhcp && /etc/init.d/dnsmasq restart"
 	say "    (re-add any server=/domain/address entries you had, e.g. for NTP or local zones)"
 fi
-[ "$port" = 53 ] || say "  dnsmasq '$INSTANCE' listens on port $port: clients only see the filter once it answers on port 53 (README: Switching from AdGuard Home)"
+[ "$port" = 53 ] || say "  dnsmasq '$INSTANCE' listens on port $port: clients only see the filter once it answers on port 53 (README: If you already run AdGuard Home)"

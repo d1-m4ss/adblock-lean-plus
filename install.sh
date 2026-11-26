@@ -1,7 +1,9 @@
 #!/bin/sh
-# adblock-lean-plus installer. Runs on your computer, installs on an OpenWrt router over SSH.
+# adblock-lean-plus installer. Runs on the OpenWrt router itself, or on your computer (over SSH).
+# git is not needed on either side: a downloaded and unpacked archive of the repository is enough.
 #
-#   ./install.sh [options] root@<router>
+#   sh install.sh [options]                on the router
+#   ./install.sh [options] root@<router>   on your computer
 #
 # Components (the blocker is always installed):
 #   --gui          LuCI pages: Services -> Adblock-lean (subscriptions, schedule, status)
@@ -24,7 +26,7 @@
 #
 # The installer never changes dnsmasq's port or upstream servers and never touches the firewall:
 # pointing dnsmasq at the DoH proxies and taking over port 53 from another resolver are listed at
-# the end as commands to run yourself (see README, "Switching from AdGuard Home").
+# the end as commands to run yourself (see README, "If you already run AdGuard Home").
 # SSH options can be passed in SSH_OPTS, e.g. SSH_OPTS="-p 2222 -i ~/.ssh/router".
 set -eu
 
@@ -51,7 +53,7 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
-[ -n "$HOST" ] || usage 1
+[ -n "$HOST" ] || [ -f /etc/openwrt_release ] || usage 1
 case "$LISTS" in ''|adguard) ;; *) echo "--lists: only 'adguard' is supported" >&2; exit 1 ;; esac
 case "$PRESET" in ''|mini|small|medium|large|huge) ;; *) echo "--preset: mini, small, medium, large or huge" >&2; exit 1 ;; esac
 case "$INSTANCE" in *[!A-Za-z0-9_]*) echo "--instance: letters, digits and _ only" >&2; exit 1 ;; esac
@@ -60,6 +62,12 @@ FILES="adblock-lean/adblock-lean adblock-lean/usr adblock-lean/etc luci-app/luci
 for f in $FILES; do
 	[ -e "$HERE/$f" ] || { echo "missing $f: run install.sh from a full checkout" >&2; exit 1; }
 done
+
+set -- "GUI=$GUI" "DOH=$DOH" "DOH_GUI=$DOH_GUI" "INSTANCE=$INSTANCE" "PRESET=$PRESET" "LISTS=$LISTS" "PERSIST=$PERSIST" \
+	"START=$START" "ENABLE=$ENABLE" "UPGRADE=$UPGRADE" "DRY=$DRY"
+
+# no router address: we are on the router, install from this directory
+[ -n "$HOST" ] || exec sh "$HERE/tools/remote-install.sh" "$@"
 
 # short path: a Unix socket path must stay under ~104 bytes (macOS TMPDIR can be long)
 CTL=$(mktemp -u /tmp/ablp-ssh.XXXXXX)
@@ -80,6 +88,4 @@ ssh_r "rm -rf $STAGE && mkdir -p $STAGE && tar -C $STAGE -xof -" < "$ARCHIVE" ||
 	{ rm -f "$ARCHIVE"; echo "could not copy the files to the router" >&2; exit 1; }
 rm -f "$ARCHIVE"
 
-ssh_r "sh $STAGE/tools/remote-install.sh" \
-	"GUI=$GUI" "DOH=$DOH" "DOH_GUI=$DOH_GUI" "INSTANCE=$INSTANCE" "PRESET=$PRESET" "LISTS=$LISTS" "PERSIST=$PERSIST" \
-	"START=$START" "ENABLE=$ENABLE" "UPGRADE=$UPGRADE" "DRY=$DRY"
+ssh_r "sh $STAGE/tools/remote-install.sh" "$@"

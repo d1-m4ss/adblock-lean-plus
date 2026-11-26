@@ -53,13 +53,25 @@ does not log queries, adblock-lean logs only its own updates.
 
 ## Install
 
-From a computer with SSH access to the router:
+Log in to the router (`ssh root@192.168.1.1`) and run there. `git` is not needed.
 
 ```sh
-git clone <repository URL> adblock-lean-plus && cd adblock-lean-plus
-./install.sh --dry-run root@192.168.1.1     # check the router, change nothing
-./install.sh --gui --doh root@192.168.1.1   # blocker + LuCI pages + DoH proxies
+rm -rf /tmp/ablp && mkdir /tmp/ablp && cd /tmp/ablp
+wget -O ablp.tar.gz https://github.com/d1-m4ss/adblock-lean-plus/archive/refs/heads/main.tar.gz
+tar -xzf ablp.tar.gz && cd adblock-lean-plus-main
+sh install.sh --dry-run        # check the router, change nothing
+sh install.sh --gui --doh      # blocker + LuCI pages + DoH proxies
 ```
+
+`/tmp` is in RAM: the downloaded files disappear on reboot (or `rm -rf /tmp/ablp`).
+
+**If the router can not download from GitHub** (no access, private copy of the repository): download the archive
+on your computer, copy it with `scp -O ablp.tar.gz root@192.168.1.1:/tmp/`, then on the router run the same
+commands with `mv /tmp/ablp.tar.gz .` instead of `wget`. If the unpacked directory has another name, `cd` into it.
+
+**From the computer instead** (macOS or Linux): unpack the archive there and run
+`./install.sh [options] root@192.168.1.1`; it copies the files over SSH. SSH options go in `SSH_OPTS`, e.g.
+`SSH_OPTS="-p 2222" ./install.sh ...`; one SSH connection is reused for all steps.
 
 | Option | What it does |
 |---|---|
@@ -73,8 +85,6 @@ git clone <repository URL> adblock-lean-plus && cd adblock-lean-plus
 | `--instance NAME` | dnsmasq instance to filter (needed only when there are several) |
 | `--start`, `--enable` | download the lists now; start at boot |
 | `--upgrade` | replace the scripts of an existing installation, keep configs |
-
-SSH options go in `SSH_OPTS`, e.g. `SSH_OPTS="-p 2222" ./install.sh ...`; one SSH connection is reused for all steps.
 
 The installer does not change dnsmasq's port or upstream servers and does not touch the firewall. At the
 end it prints the `uci` commands that point dnsmasq at the DoH proxies.
@@ -127,15 +137,17 @@ rm -rf /etc/adguardhome /var/lib/adguardhome   # config and work dir (query log)
 
 ### 4. Install adblock-lean-plus
 
+On the router, download and unpack as in [Install](#install), then:
+
 ```sh
-./install.sh --gui --doh --start --enable root@<router>
+sh install.sh --gui --doh --start --enable
 ```
 
 Run the `uci` commands it prints to switch dnsmasq to the DoH proxies, add your lists from step 1 on the
 Subscriptions page, then check from a client: `nslookup doubleclick.net` → no address (NXDOMAIN, with lists that
 block it), normal sites resolve.
 
-**No-gap variant:** install first with `--instance <dnsmasq instance> --start` while AGH still answers (the lists load
+**No-gap variant:** install first (same command) with `--instance <dnsmasq instance> --start` while AGH still answers (the lists load
 into dnsmasq on its other port), then do steps 2–3; filtering starts the moment dnsmasq takes port 53.
 
 ## Firewall (optional)
@@ -181,28 +193,33 @@ To change them: LuCI → Services → HTTPS DNS Proxy (`--doh-gui`), or edit `/e
 
 ## Updating
 
-- `./install.sh --upgrade root@<router>` replaces the scripts and keeps the configs.
-- Upstream changes: `tools/sync-upstream.sh` pulls adblock-lean (`next-version`) and the LuCI app (`main`) into
+- Download and unpack the new archive as in [Install](#install), then `sh install.sh --upgrade` (add `--gui` to update
+  the LuCI pages too): the scripts are replaced, the configs kept.
+- Upstream changes (maintainers, in a git checkout): `tools/sync-upstream.sh` pulls adblock-lean (`next-version`) and the LuCI app (`main`) into
   their subtrees; resolve conflicts, run `sh adblock-lean/tests/test-list-conv.sh`, test on a router.
 - adblock-lean's own `update` command is disabled in this fork: it would replace the fork with the upstream version.
 - The `luci-app/` subtree's upstream package feed and `.apk` are not used: that build is for adblock-lean 0.8.x.
 
 ## Uninstall
 
-If dnsmasq uses the DoH proxies, give it other upstreams first, or DNS stops when the proxies are removed:
+On the router. If dnsmasq uses the DoH proxies, give it other upstreams first, or DNS stops when the proxies are
+removed:
 
 ```sh
-ssh root@<router> 'uci -q del dhcp.@dnsmasq[0].server; uci -q del dhcp.@dnsmasq[0].noresolv; uci commit dhcp; /etc/init.d/dnsmasq restart'
+uci -q del dhcp.@dnsmasq[0].server
+uci -q del dhcp.@dnsmasq[0].noresolv
+uci commit dhcp && /etc/init.d/dnsmasq restart
 ```
 
 Then:
 
 ```sh
-ssh root@<router> '/etc/init.d/adblock-lean uninstall'
-ssh root@<router> 'rm -rf /usr/libexec/rpcd/luci.adblock-lean /usr/share/rpcd/acl.d/luci-app-adblock-lean.json \
-  /usr/share/luci/menu.d/luci-app-adblock-lean.json /www/luci-static/resources/view/adblock-lean; /etc/init.d/rpcd reload'
-ssh root@<router> 'apk del https-dns-proxy luci-app-https-dns-proxy'      # opkg: opkg remove luci-app-https-dns-proxy https-dns-proxy
-ssh root@<router> 'rm -rf /etc/adblock-lean /etc/config/https-dns-proxy'  # remaining configs, if not needed
+/etc/init.d/adblock-lean uninstall
+rm -rf /usr/libexec/rpcd/luci.adblock-lean /usr/share/rpcd/acl.d/luci-app-adblock-lean.json \
+  /usr/share/luci/menu.d/luci-app-adblock-lean.json /www/luci-static/resources/view/adblock-lean
+/etc/init.d/rpcd reload
+apk del https-dns-proxy luci-app-https-dns-proxy      # opkg: opkg remove luci-app-https-dns-proxy https-dns-proxy
+rm -rf /etc/adblock-lean /etc/config/https-dns-proxy  # remaining configs, if not needed
 ```
 
 `uninstall` stops filtering and removes the scripts, the boot hooks, the saved blockset and the dnsmasq `addnmount`
