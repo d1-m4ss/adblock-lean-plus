@@ -61,7 +61,8 @@ for f in $FILES; do
 	[ -e "$HERE/$f" ] || { echo "missing $f: run install.sh from a full checkout" >&2; exit 1; }
 done
 
-CTL=$(mktemp -u "${TMPDIR:-/tmp}/ablp-ssh.XXXXXX")
+# short path: a Unix socket path must stay under ~104 bytes (macOS TMPDIR can be long)
+CTL=$(mktemp -u /tmp/ablp-ssh.XXXXXX)
 trap 'ssh -o ControlPath="$CTL" -O exit "$HOST" >/dev/null 2>&1 || true' EXIT
 # shellcheck disable=SC2086
 ssh_r() { ssh ${SSH_OPTS:-} -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath="$CTL" -o ControlPersist=120 "$HOST" "$@"; }
