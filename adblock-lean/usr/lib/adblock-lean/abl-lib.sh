@@ -1,4 +1,5 @@
 #!/bin/sh
+# Modified in adblock-lean-plus (2026-11): see FORK-NOTES.md for the changes against upstream.
 # shellcheck disable=SC3043,SC3003,SC3001,SC3020,SC3044,SC2016,SC3057,SC3019,SC2018,SC2019,SC3060,SC3045
 # shellcheck source=/dev/null
 
@@ -897,6 +898,12 @@ print_def_cfg_blockset()
 
 	# One or more *hosts* format blocklist URLs and/or short list identifiers separated by spaces
 	hosts_block_lists="" @ string
+
+	# One or more *AdGuard DNS filtering syntax* blocklist URLs separated by spaces
+	# (e.g. AdGuard DNS filter, AdGuard Popup Hosts filter, Hagezi 'adblock' format lists)
+	# Supported: '||example.com^' rules, '@@' exceptions (added to the allowlist), the 'important', 'badfilter'
+	# and blocking 'dnsrewrite' modifiers. Rules with wildcards, regexes or other modifiers are skipped.
+	adguard_block_lists="" @ string
 
 	# Path to optional local *raw domain* allowlist/blocklist files in the form:
 	# site1.com

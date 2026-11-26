@@ -1,4 +1,5 @@
 #!/bin/sh
+# Modified in adblock-lean-plus (2026-11): see FORK-NOTES.md for the changes against upstream.
 # shellcheck disable=SC3043,SC2016,SC3060,SC3040,SC3003,SC3020,SC3045
 # shellcheck source=/dev/null
 
@@ -18,6 +19,7 @@ VAR2CFG_MAP="$(
 		raw_allow_lists
 		raw_ipv4_block_lists
 		hosts_block_lists
+		adguard_block_lists
 		local_allowlist_path
 		local_blocklist_path
 		local_ipv4_blocklist_path
@@ -1718,6 +1720,11 @@ set_blocksets_env()
 				11110|11101) sbe_state=0 ;; # running
 				01100) [ "${sbe_path}" = "${cur_path_meta}" ] && sbe_state=3 || sbe_state=1 ;; # paused / stopped
 				01000) [ "${sbe_path}" = "${cur_persist_path}" ] && sbe_state=4 || sbe_state=1 ;;
+				# persistent blockset loaded by the early boot script (adblock-lean-early) before dnsmasq started:
+				# running, but RAM metadata does not exist yet
+				11010) [ -n "${cur_persist_path}" ] && [ "${sbe_path}" = "${cur_persist_path}" ] &&
+						[ "$(${SED_CMD:?} -n '2{s/^#file: //p;q}' "${ABL_CFG_DIR:?}/boot-cs.${sbe_id}" 2>/dev/null)" = "${cur_persist_path}" ] &&
+						sbe_state=0 || sbe_state=1 ;;
 				00000) sbe_state=4 ;; # stopped
 				*) sbe_state=1 ;;
 			esac
@@ -2214,7 +2221,12 @@ set_params()
 
 inst_failed()
 {
-	local fail_report_ids fail_ids="${1}"
+	local fail_report_ids fail_ids="${1}" fail_id
+	# a blockset that failed to install must not be restored by the early boot script
+	for fail_id in ${fail_ids}
+	do
+		rm -f "${ABL_CFG_DIR:?}/boot-cs.${fail_id}"
+	done
 
 	subtract_a_from_b "${inst_fail_reported_ids}" "${fail_ids}" fail_report_ids
 	[ -n "${fail_report_ids}" ] &&
@@ -2391,6 +2403,12 @@ try_install_blocksets()
 		rm_bk "${set_id}"
 
 		set_params "${set_id}" run_state=0
+
+		# remember the conf-script of a checked persistent blockset for the early boot script
+		local bcs_path bcs_md5 bcs_in_cd bcs_dirs
+		get_params "${set_id}" bcs_path=cur_path bcs_md5=cur_md5 bcs_in_cd=install_in_cd bcs_dirs=conf_dirs
+		update_boot_cs "${set_id}" "${bcs_path}" "${bcs_md5}" "${bcs_in_cd}" "${bcs_dirs}" ||
+			log_msg -warn -fb "${set_id}" "Failed to save the conf-script for the early boot script{}."
 
 		add2list "${try_inst_ok_ids_out_var}" "${set_id}"
 	done

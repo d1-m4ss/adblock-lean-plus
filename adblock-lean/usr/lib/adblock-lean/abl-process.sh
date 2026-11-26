@@ -1,4 +1,5 @@
 #!/bin/sh
+# Modified in adblock-lean-plus (2026-11): see FORK-NOTES.md for the changes against upstream.
 # shellcheck disable=SC3043,SC3001,SC2016,SC2015,SC3020,SC2181,SC2019,SC2018,SC3045,SC3003,SC3060,SC3057,SC3040
 
 # silence shellcheck warnings
@@ -12,7 +13,10 @@ ERR_F="${ABL_TMP_DIR}/process-errors"
 
 ABL_TEST_DOM_BASE="adblocklean-test.totallybogus"
 
-ALL_PART_FORMATS="raw hosts"
+ALL_PART_FORMATS="raw hosts adguard"
+
+# UTF-8 byte order mark, stripped from the first line of every part
+UTF8_BOM="$(printf '\357\273\277')"
 ALL_PART_TYPES="allow block ipv4_block"
 
 
@@ -156,7 +160,7 @@ get_feed_url()
 
 	clear_vars "${gfu_out_var}"
 
-	case "${format}" in raw|hosts) ;; *) reg_fail "Unexpected list format '${format}'."; return 1; esac
+	case "${format}" in raw|hosts|adguard) ;; *) reg_fail "Unexpected list format '${format}'."; return 1; esac
 
 	tolower list_id_lc "${list_id}"
 	case "${list_id_lc}" in hagezi:*|oisd:*|stevenblack:*) ;; *)
@@ -248,6 +252,115 @@ process_set_part()
 		${AWK_CMD} -F "." '{for(f=NF;f>1;f--)printf "%s.",$f;print $1}' # invert labels order back
 	}
 
+	# Converts AdGuard DNS filtering syntax (AdGuard DNS filter, AdGuard Popup Hosts, Hagezi 'adblock' lists etc)
+	# to raw domains. Block rules go to STDOUT, exception (@@) rules go to file ${adg_allow_file}.
+	# Supported rules (anything else is counted in ${adg_skip_file} and skipped):
+	#   ||example.com^  ||example.com^|  ||example.com  |example.com^  example.com  0.0.0.0 example.com
+	#   .example.com^ (subdomains only in AdGuard) -> 'example.com', i.e. the domain itself is blocked too:
+	#     dnsmasq wildcard entries ('*.example.com') in a large blockset add ~130 ms to every uncached
+	#     forwarded query (measured with dnsmasq 2.93), so they are not used
+	#   modifiers: $important; for block rules also $dnsrewrite=<blocking answer>
+	#     (NXDOMAIN, REFUSED, 0.0.0.0, ::, ad-block.dns.adguard.com)
+	#   @@<any of the above>: exception
+	#   <rule>$badfilter: disables the identical rule in this list
+	# $important block rules win over exceptions for the same domain, as in AdGuard Home.
+	# Rules with wildcards, regexes or other modifiers can not be expressed in dnsmasq and are skipped.
+	# The input is buffered in a temp file because $badfilter rules may follow the rules they disable.
+	conv_adguard_to_raw()
+	{
+		local adg_tmp="${ABL_TMP_DIR}/adg_input_${index}" adg_rv
+		cat > "${adg_tmp}" || { rm -f "${adg_tmp}"; return 1; }
+		# the first pass is only needed when the list has badfilter or important rules
+		local adg_passes=1 adg_files="${adg_tmp}"
+		grep -qiE '[$,](badfilter|important)' "${adg_tmp}" && adg_passes=2 adg_files="${adg_tmp} ${adg_tmp}"
+		# shellcheck disable=SC2086
+		${AWK_CMD:?} -v passes="${adg_passes}" -v allow_f="${adg_allow_file:?}" -v imp_f="${adg_imp_file:?}" \
+			-v skip_f="${adg_skip_file:?}" '
+			# returns the rule without "@@", modifiers and anchors in R_DOM, with flags in R_ALLOW, R_IMP;
+			# returns 0 if the rule is not supported
+			function parse(rule,    p, mods, n, m, i, v) {
+				R_ALLOW = 0; R_IMP = 0; R_DOM = ""
+				if (substr(rule, 1, 2) == "@@") { R_ALLOW = 1; rule = substr(rule, 3) }
+				p = index(rule, "$")
+				mods = ""
+				if (p) { mods = substr(rule, p + 1); rule = substr(rule, 1, p - 1) }
+				if (mods != "") {
+					n = split(mods, m, ",")
+					for (i = 1; i <= n; i++) {
+						if (m[i] == "important") { R_IMP = 1; continue }
+						if (!R_ALLOW && substr(m[i], 1, 11) == "dnsrewrite=") {
+							v = substr(m[i], 12)
+							sub(/\.$/, "", v)
+							if (v ~ /^(nxdomain|refused|0\.0\.0\.0|::|ad-block\.dns\.adguard\.com|noerror;cname;ad-block\.dns\.adguard\.com)$/) continue
+						}
+						return 0
+					}
+				}
+				if (substr(rule, 1, 2) == "||") rule = substr(rule, 3)
+				else if (substr(rule, 1, 1) == "|") rule = substr(rule, 2)
+				else if (substr(rule, 1, 1) == ".") rule = substr(rule, 2)
+				# hosts syntax: only the blocking forms, as in conv_hosts_to_raw
+				else if (rule ~ /^(0\.0\.0\.0|::)[ \t]+/) sub(/^[^ \t]+[ \t]+/, "", rule)
+				if (substr(rule, length(rule)) == "|") rule = substr(rule, 1, length(rule) - 1)
+				if (substr(rule, length(rule)) == "^") rule = substr(rule, 1, length(rule) - 1)
+				if (rule !~ /^[a-z0-9_-]+([.][a-z0-9_-]+)+$/) return 0
+				# IP address rules and localhost names are not domain blocks
+				if (rule ~ /^[0-9.]+$/ || rule ~ /^localhost([.]|$)/) return 0
+				R_DOM = rule
+				return 1
+			}
+			FNR == 1 { pass++ }
+			{ line = tolower($0); sub(/\r$/, "", line) }
+			# pass 1 (only with passes=2): collect $badfilter targets and $important block rules
+			passes == 2 && pass == 1 {
+				if (line ~ /[$,]badfilter(,|$)/) {
+					t = line
+					sub(/\$badfilter$/, "", t); sub(/,badfilter,/, ",", t); sub(/,badfilter$/, "", t); sub(/\$badfilter,/, "$", t)
+					bad[t]
+				}
+				else if (parse(line) && !R_ALLOW && R_IMP) imp_rule[line] = R_DOM
+				next
+			}
+			# start of pass 2: $important block rules not disabled by $badfilter win over plain exceptions;
+			# they are also written to imp_f so that exceptions for a parent domain do not remove them
+			passes == 2 && pass == 2 && FNR == 1 {
+				for (r in imp_rule) if (!(r in bad)) { important[imp_rule[r]]; print imp_rule[r] > imp_f }
+			}
+			# pass 2: convert
+			# fast path for the most common rule form, "||example.com^"
+			line ~ /^\|\|[a-z0-9_-]+([.][a-z0-9_-]+)+\^$/ {
+				if (line ~ /^\|\|[0-9.]+\^$/) skipped++ # IP address rule
+				else if (!(line in bad)) print substr(line, 3, length(line) - 3)
+				next
+			}
+			{
+				if (line ~ /[$,]badfilter(,|$)/ || (line in bad)) next
+				if (!parse(line)) { skipped++; next }
+				if (R_ALLOW) {
+					if (!R_IMP && (R_DOM in important)) next
+					print R_DOM > allow_f
+				}
+				else print R_DOM
+			}
+			END { print skipped + 0 > skip_f }
+		' ${adg_files}
+		adg_rv=${?}
+		rm -f "${adg_tmp}"
+		return "${adg_rv}"
+	}
+
+	# Remove UTF-8 BOM, '!' comment lines and '[Adblock Plus 2.0]'-style headers, cosmetic rules ('example.com##.ad'),
+	# comment lines and trailing comments, remove whitespaces
+	# (the '#' checks only run on lines that contain '#': this keeps the cost close to a single substitution)
+	sanitize_part()
+	{
+		${SED_CMD:?} "1s/^${UTF8_BOM}//"';
+			s/^[ \t]*//;
+			/^[![]/d;
+			/#/{ /^[^ \t#]*#[@$?%]*#[^ \t]/d; s/#.*$//; };
+			s/[ \t]*$//; /^$/d'
+	}
+
 	case_conv() { tr 'A-Z' 'a-z'; }
 
 	local index="${1:?}"
@@ -286,6 +399,10 @@ process_set_part()
 		\
 		ucl_err_file="${ABL_TMP_DIR}/ucl_err_${index}" \
 		rogue_el_file="${ABL_TMP_DIR}/rogue_el_${index}" \
+		adg_allow_file="${PROCESSED_PARTS_DIR}/${index}_adg_allow" \
+		adg_imp_file="${PROCESSED_PARTS_DIR}/${index}_adg_important" \
+		adg_skip_file="${ABL_TMP_DIR}/adg_skip_${index}" \
+		adg_skipped \
 		part_compr_or_cat="${INTERM_COMPR_OR_CAT_STDOUT:?}"
 
 	# vars set by the scheduler
@@ -330,8 +447,10 @@ process_set_part()
 		case_conv_or_cat="case_conv" \
 		val_entry_regex='^[[:alnum:]-]+$|^(\*|[[:alnum:]_-]+)([.][[:alnum:]_-]+)+$'
 
-	[ "${format}" = hosts ] &&
-		format_conv_or_cat="conv_hosts_to_raw"
+	case "${format}" in
+		hosts) format_conv_or_cat="conv_hosts_to_raw" ;;
+		adguard) format_conv_or_cat="conv_adguard_to_raw"
+	esac
 
 	if [ "${is_ipv4}" = 1 ]
 	then
@@ -356,7 +475,7 @@ process_set_part()
 		msg_mirr=
 		[ -n "${cur_mirror}" ] && msg_mirr=" [   mirror: ${cur_mirror}${mirror_pad} ]"
 
-		rm -f "${rogue_el_file}" "${part_stats_file}" "${ucl_err_file}"
+		rm -f "${rogue_el_file}" "${part_stats_file}" "${ucl_err_file}" "${adg_allow_file}" "${adg_imp_file}" "${adg_skip_file}"
 
 		msg="Processing ${format} blockset part"
 		get_pad pad "${msg}" 30
@@ -376,10 +495,10 @@ process_set_part()
 			fi
 		} |
 
-		# Remove comment lines and trailing comments, remove whitespaces
-		${SED_CMD} 's/#.*$//; s/^[ \t]*//; s/[ \t]*$//; /^$/d' |
+		# Remove BOM, comments, cosmetic rules and whitespaces
+		sanitize_part |
 
-		# Convert hosts to raw format
+		# Convert hosts or AdGuard syntax to raw format
 		${format_conv_or_cat} |
 
 		# Count bytes and entries
@@ -460,6 +579,13 @@ process_set_part()
 			get_pad stats_pad "${print_id}" 42
 			get_pad suffix_pad "${cnt_human}" 9
 			log_msg "Successfully processed part:    ${green}${print_id}${n_c} ${stats_pad}[ ${orange}${part_size_human}${n_c}  - ${suffix_pad}${orange}${cnt_human} entries${n_c} ]"
+			if [ "${format}" = adguard ]
+			then
+				read_str_from_file -n 32 -v adg_skipped -f "${adg_skip_file}" -a 1 -q
+				[ "${adg_skipped:-0}" != 0 ] &&
+					log_msg "Skipped ${adg_skipped} AdGuard rule(s) that can not be expressed in dnsmasq (wildcards, regexes, unsupported modifiers) in part '${print_id}'."
+				rm -f "${adg_skip_file}"
+			fi
 
 			rm -f "${ucl_err_file}"
 			# set this mirror as forced if this is not the first DL attempt
@@ -656,6 +782,7 @@ gen_blocksets()
 		\
 		raw_block_lists \
 		hosts_block_lists \
+		adguard_block_lists \
 		local_part \
 		\
 		part_type \
@@ -687,8 +814,9 @@ gen_blocksets()
 		do
 			local "indexes_${part_type}="
 
-			# hosts-format is only valid for type 'block'
-			[ "${format}" = hosts ] && [ "${part_type}" != block ] && continue
+			# hosts and adguard formats are only valid for type 'block'
+			# (exceptions in adguard-format lists are extracted from the block part)
+			case "${format}" in hosts|adguard) [ "${part_type}" != block ] && continue; esac
 
 			for set_id in ${set_ids}
 			do
@@ -721,7 +849,7 @@ gen_blocksets()
 							bad_hagezi_urls="$(
 								printf %s "${dl_parts}" |
 								tr ' ' '\n' |
-								${SED_CMD} -En '/(raw.githubusercontent.com\/hagezi\/dns-blocklists\/|gitlab.com\/hagezi\/mirror\/)/{/onlydomains\./d;p;}'
+								${SED_CMD} -En '/(raw.githubusercontent.com\/hagezi\/dns-blocklists\/|gitlab.com\/hagezi\/mirror\/)/{/onlydomains\./d;/\/(nrd|dga)[0-9][0-9-]*\.txt$/d;p;}'
 							)"
 							[ -z "${bad_hagezi_urls}" ] ||
 							{
@@ -737,7 +865,8 @@ gen_blocksets()
 				do
 					add2list "all_process_parts_${format}" "${part}" "${_NL_}"
 				done
-				[ -n "${local_part}" ] && add2list "all_process_parts_${format}" "local=${local_part}" "${_NL_}"
+				# local lists are raw-format: process them once, not once per format
+				[ -n "${local_part}" ] && [ "${format}" = raw ] && add2list "all_process_parts_${format}" "local=${local_part}" "${_NL_}"
 			done
 		done
 	done
@@ -784,8 +913,8 @@ gen_blocksets()
 
 			for part_type in ${ALL_PART_TYPES:?}
 			do
-				# hosts-format is only valid for type 'block'
-				[ "${format}" = hosts ] && [ "${part_type}" != block ] && continue
+				# hosts and adguard formats are only valid for type 'block'
+				case "${format}" in hosts|adguard) [ "${part_type}" != block ] && continue; esac
 
 				case "${part_type}" in
 					ipv4_*) is_ipv4=1 ;;
@@ -856,9 +985,10 @@ gen_blocksets()
 			bk_cnt_prev=bk_cnt \
 			bk_ext \
 			raw_block_lists \
-			hosts_block_lists
+			hosts_block_lists \
+			adguard_block_lists
 
-		[ -n "${raw_block_lists}${hosts_block_lists}" ] ||
+		[ -n "${raw_block_lists}${hosts_block_lists}${adguard_block_lists}" ] ||
 			log_msg -yellow "" "NOTE: No URLs specified for blocklist download."
 
 		conn_check_req=1
@@ -956,11 +1086,15 @@ gen_blocksets()
 # shellcheck disable=SC2329
 gen_blockset()
 {
+	# domains listed in ${adg_keep_f} ($important AdGuard block rules) are never removed
 	rm_allow_domains()
 	{
-		${AWK_CMD:?} 'NR==FNR { if ($0 ~ /^\*\./) { allow_wild[substr($0,3)]; next }; allow[$0]; next }
+		${AWK_CMD:?} 'FILENAME == ARGV[1] { if ($0 ~ /^\*\./) { allow_wild[substr($0,3)]; next }; allow[$0]; next }
+			FILENAME == ARGV[2] { keep[$0]; next }
+			($1 in keep) { print; next }
 			{ n=split($1,arr,"."); addr = arr[n]; for ( i=n-1; i>=1; i-- )
-			{ addr = arr[i] "." addr; if ( (i>1 && addr in allow_wild) || addr in allow ) next } } 1' "${merged_allow_f:?}" -
+			{ addr = arr[i] "." addr; if ( (i>1 && addr in allow_wild) || addr in allow ) next } } 1' \
+				"${merged_allow_f:?}" "${adg_keep_f:?}" -
 	}
 
 	whitelist_filter()
@@ -1180,6 +1314,37 @@ gen_blockset()
 			${dedup_cmd_or_cat} >> "${merged_allow_f}" || return 1
 			use_allowlist=1
 		fi
+	done
+
+	# add exceptions (@@ rules) extracted from adguard-format block parts
+	# - not in whitelist mode (they would whitelist third-party domains)
+	# - an exception never covers a domain (or a parent of a domain) from the user's local blocklist
+	# - $important block rules are kept even if an exception covers them (adg_keep_f, see rm_allow_domains)
+	local adg_allow_f adg_allow_cnt local_blocklist_path \
+		adg_keep_f="${proc_dir}/adg_important"
+	: > "${adg_keep_f}" || return 1
+	get_params "${set_id}" local_blocklist_path
+	[ "${whitelist_mode}" = 1 ] ||
+	for index in ${block_indexes}
+	do
+		[ -s "${PROCESSED_PARTS_DIR}/${index}_adg_important" ] &&
+			cat "${PROCESSED_PARTS_DIR}/${index}_adg_important" >> "${adg_keep_f}"
+		adg_allow_f="${PROCESSED_PARTS_DIR}/${index}_adg_allow"
+		[ -s "${adg_allow_f}" ] || continue
+		if [ -n "${local_blocklist_path}" ] && [ -s "${local_blocklist_path}" ]
+		then
+			${AWK_CMD:?} 'FILENAME == ARGV[1] { d = tolower($1); sub(/^\*\./, "", d); n = split(d, a, ".");
+					s = a[n]; for (i = n - 1; i >= 1; i--) { s = a[i] "." s; covered[s] }; next }
+				!($0 in covered)' "${local_blocklist_path}" "${adg_allow_f}"
+		else
+			cat "${adg_allow_f}"
+		fi > "${adg_allow_f}.tmp" || return 1
+		adg_allow_cnt="$(wc -l < "${adg_allow_f}.tmp")"
+		cat "${adg_allow_f}.tmp" >> "${merged_allow_f}" || return 1
+		rm -f "${adg_allow_f}.tmp"
+		job_get_params "${index}" print_id
+		reg_msg "Added ${adg_allow_cnt// /} exception(s) from AdGuard-format part '${print_id}' to the allowlist."
+		use_allowlist=1
 	done
 
 	case "${use_allowlist}" in

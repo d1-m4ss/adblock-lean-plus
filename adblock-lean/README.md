@@ -1,3 +1,5 @@
+> **adblock-lean-plus:** this directory is a modified copy of [lynxthecat/adblock-lean](https://github.com/lynxthecat/adblock-lean) (branch `next-version`). Install it with `../install.sh`, not with the upstream installer described below (that installs the upstream version), and do not use `service adblock-lean update` (disabled in this fork). Changes: [FORK-NOTES.md](FORK-NOTES.md).
+
 # ⚔ adblock-lean
 
 adblock-lean is a low maintenance (almost set and forget), powerful and ultra-efficient adblocking solution for OpenWrt that **does not mandate any external dependencies** or introduce unnecessary bloat. It is  **highly optimized for RAM & CPU efficiency** during blocklist download & processing, and does not remain running in memory after execution.  adblock-lean is designed to leverage the [major rewrite of the DNS server and domain handling code](https://thekelleys.org.uk/dnsmasq/CHANGELOG) associated with dnsmasq 2.86, which drastically improves dnsmasq performance and reduces memory footprint. This **facilitates the use of very large blocklists even for low spec, low performance devices.**
@@ -211,6 +213,13 @@ adblock-lean supports specifying lists either by the complete **download URL** o
 2. Construct a list identifier in the format `stevenblack:[list_name]`, for example: `stevenblack:base`
 3. Add the list identifier to the `hosts_block_lists` config option in the adblock-lean config file
 
+### Adding an **AdGuard-syntax** list
+Lists written in AdGuard DNS filtering syntax (e.g. AdGuard DNS filter `https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt`, AdGuard Popup Hosts filter `https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt`, Hagezi `adblock` format lists) can be added by URL to the `adguard_block_lists` config option.
+- Converted: `||example.com^` (and `||example.com^|`, `||example.com`, `|example.com^`, plain `example.com`, `0.0.0.0 example.com`), `.example.com^` (converted to `example.com`, so the domain itself is blocked too: dnsmasq wildcard entries slow down every uncached query when the blockset is large), the `important` modifier, blocking `dnsrewrite` (`NXDOMAIN`, `REFUSED`, `0.0.0.0`, `::`, `ad-block.dns.adguard.com`), `badfilter`.
+- `@@` exception rules are added to the blockset's allowlist. An `important` block rule wins over a plain exception for the same domain.
+- Rules that dnsmasq can not express (wildcards inside a domain, regexes, other modifiers such as `client` or `denyallow`) are skipped; the number of skipped rules is logged.
+- Lines starting with `!`, a UTF-8 BOM and cosmetic rules (`example.com##.ad`) are ignored in lists of every format.
+
 ### Adding another list
 - Any other raw or dnsmasq format lists of your choice can be used by specifying its download URL, but make sure the list conforms to [supported formats](#supported-formats).
 
@@ -228,6 +237,7 @@ adblock-lean supports specifying lists either by the complete **download URL** o
 |`dnsmasq_ipv4_block_lists`          | One or more dnsmasq format ipv4 blocklist URLs to download and process                    |
 |`dnsmasq_allow_lists`               | One or more dnsmasq format allowlist URLs to download and process                         |
 |`hosts_block_lists`                 | One or more dnsmasq format blocklist URLs to download and process                         |
+|`adguard_block_lists`               | One or more AdGuard-syntax blocklist URLs to download and process (exceptions included)   |
 |`local_allowlist_path`              | Path to local allowlist (included domains will not be blocked)                            |
 |`local_blocklist_path`              | Path to local blocklist (included domains will be blocked)                                |
 |`test_domains`                      | Domains used to test DNS resolution after loading the final blocklist                     |
