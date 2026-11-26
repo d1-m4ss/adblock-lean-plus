@@ -79,27 +79,83 @@ SSH options go in `SSH_OPTS`, e.g. `SSH_OPTS="-p 2222" ./install.sh ...`; one SS
 The installer does not change dnsmasq's port or upstream servers and does not touch the firewall. At the
 end it prints the `uci` commands that point dnsmasq at the DoH proxies.
 
-## Switching from AdGuard Home
+## If you already run AdGuard Home
 
-AdGuard Home usually owns port 53 and forwards local names to dnsmasq on another port. The switch is:
-dnsmasq back on port 53 with the DoH proxies as upstreams, AdGuard Home stopped. Do it in one step and keep
-AdGuard Home installed (stopped) until you are sure:
+AdGuard Home (AGH) and adblock-lean-plus both want to be the router's DNS on port 53, so AGH goes first.
+Two common AGH setups exist; check yours with `netstat -lntup | grep ':53 '`:
 
-1. `./install.sh --gui --doh --persist --start root@<router>` — the blocklist is loaded into dnsmasq while AdGuard Home
-   still answers clients.
-2. Carry over AdGuard Home settings you rely on: "Disallowed domains" → local blocklist (LuCI, Subscriptions page);
-   DNS rewrites → `uci add_list dhcp.@dnsmasq[0].address='/name/ip'`; domain-specific upstreams → `server=/domain/ip`.
-3. Check before switching:
-   - clients outside the LAN subnets (VPN, Tailscale) using the router for DNS: dnsmasq's `localservice` answers
-     local subnets only;
-   - domains that legitimately resolve to private addresses: dnsmasq's rebind protection drops those answers unless
-     listed in `rebind_domain`.
-4. Switch: stop AdGuard Home (`/etc/init.d/adguardhome stop`), set dnsmasq's port to 53 (`uci delete dhcp.@dnsmasq[0].port`),
-   point it at the DoH proxies (commands printed by the installer), `uci commit dhcp && /etc/init.d/dnsmasq restart`.
-   Test from a client.
-5. When it works: `/etc/init.d/adguardhome disable`, `/etc/init.d/adblock-lean enable`. Remove AdGuard Home later.
+- **AGH on port 53**, dnsmasq moved to another port (e.g. 54) and used by AGH for local names. Most guides do this.
+- **dnsmasq on port 53**, forwarding to AGH (e.g. `server=127.0.0.1#5353` or DHCP option 6 pointing clients to AGH).
 
-Rollback: set the old dnsmasq port and servers back, `/etc/init.d/adguardhome start`.
+### 1. Note what to carry over
+
+Save the AGH config first (`/etc/adguardhome/adguardhome.yaml`, older packages: `/etc/adguardhome.yaml`) and note:
+
+| In AGH | In adblock-lean-plus |
+|---|---|
+| Blocklists (Filters → DNS blocklists) | the same URLs: LuCI → Adblock-lean → Subscriptions → "AdGuard catalog…" or "Add URL" (format is detected), or `install.sh --lists adguard` for AdGuard DNS filter + Popup Hosts |
+| Allowlists, custom `@@` rules | local allowlist (Subscriptions page) |
+| Disallowed domains, custom block rules | local blocklist (Subscriptions page) |
+| DNS rewrites | `uci add_list dhcp.@dnsmasq[0].address='/name/ip'` |
+| Upstream DNS (DoH) | `--doh` (Cloudflare, AdGuard unfiltered, Quad9) or your own in `/etc/config/https-dns-proxy` |
+| Domain-specific upstreams `[/domain/]ip` | `uci add_list dhcp.@dnsmasq[0].server='/domain/ip'` |
+| Query log, statistics, per-client rules | not available |
+
+### 2. Give port 53 back to dnsmasq
+
+Do this from a wired or Wi-Fi client you can test with, and keep a way back (AGH stays installed until step 4).
+
+```sh
+/etc/init.d/adguardhome stop
+uci -q delete dhcp.@dnsmasq[0].port          # AGH-on-53 setup: dnsmasq back to port 53
+uci -q delete dhcp.@dnsmasq[0].server        # drop forwards to AGH / old upstream entries
+uci set dhcp.@dnsmasq[0].noresolv='0'        # for now use the WAN's DNS servers
+uci set dhcp.@dnsmasq[0].cachesize='10000'   # AGH setups often set 0 (AGH did the caching)
+uci commit dhcp && /etc/init.d/dnsmasq restart
+```
+
+If DHCP option 6 or a firewall redirect points clients to AGH's address or port, point it at the router / port 53.
+Open a few sites from a client. If something fails: `/etc/init.d/adguardhome start` and restore the old values.
+
+### 3. Remove AdGuard Home
+
+```sh
+/etc/init.d/adguardhome disable
+apk del adguardhome                     # opkg: opkg remove adguardhome
+rm -rf /etc/adguardhome /var/lib/adguardhome   # config and work dir (query log), after your backup
+```
+
+### 4. Install adblock-lean-plus
+
+```sh
+./install.sh --gui --doh --start --enable root@<router>
+```
+
+Run the `uci` commands it prints to switch dnsmasq to the DoH proxies, add your lists from step 1 on the
+Subscriptions page, then check from a client: `nslookup doubleclick.net` → no address (NXDOMAIN, with lists that
+block it), normal sites resolve.
+
+**No-gap variant:** install first with `--instance <dnsmasq instance> --start` while AGH still answers (the lists load
+into dnsmasq on its other port), then do steps 2–3; filtering starts the moment dnsmasq takes port 53.
+
+## Firewall (optional)
+
+adblock-lean-plus needs no firewall changes: clients use the router as DNS (DHCP option 6) and dnsmasq filters.
+Devices with a hard-coded DNS server (e.g. 8.8.8.8) bypass it; a redirect sends their plain DNS to the router:
+
+```sh
+uci set firewall.dns_redirect=redirect
+uci set firewall.dns_redirect.name='Force-DNS-to-router'
+uci set firewall.dns_redirect.src='lan'
+uci set firewall.dns_redirect.src_dport='53'
+uci set firewall.dns_redirect.dest_port='53'
+uci set firewall.dns_redirect.proto='tcp udp'
+uci set firewall.dns_redirect.target='DNAT'
+uci commit firewall && /etc/init.d/firewall reload
+```
+
+Encrypted DNS inside apps and browsers (DoH/DoT) can not be redirected; the HaGeZi "Encrypted DNS/VPN/Proxy bypass"
+preset blocks the names of public DoH servers, so most browsers fall back to the router.
 
 ## DoH upstreams
 
