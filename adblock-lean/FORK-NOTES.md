@@ -18,6 +18,11 @@ Base: upstream `lynxthecat/adblock-lean`, branch `next-version`, commit `1c1346e
 | `ABL_UPD_CHANNEL=local-fork`: upstream update check off, `update` refuses to run (it would replace the fork) | — | `adblock-lean` |
 | Tests: `tests/test-list-conv.sh` (run with busybox: `sh tests/test-list-conv.sh`) | — | `tests/` |
 
+## First start with a managed persistent blockset
+
+A missing persistent blockset file at `start` in `managed` mode is normal (first start, after `sysupgrade`) and is
+logged as information, not as an error.
+
 ## Install, update, upstream sync
 
 See the README of the repository: `install.sh` installs and upgrades; `tools/sync-upstream.sh` pulls upstream

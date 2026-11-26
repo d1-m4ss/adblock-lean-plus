@@ -1930,8 +1930,12 @@ set_blockset_env()
 			{
 				[ -n "${cur_persist_path}" ] ||
 					{
-						[ "${CUR_ACT}" = gen_persist_blockset ] ||
-							reg_fail -fb "${set_id}" "Persistent blockset file{} not found in directory '${persist_dir}'."
+						case "${CUR_ACT}:${persist_mode}" in
+							gen_persist_blockset:*) ;;
+							# normal on the first start and after sysupgrade: the file is created below
+							start:managed|boot:managed) reg_msg -fb "${set_id}" "No persistent blockset file{} in '${persist_dir}' yet: it will be created." ;;
+							*) reg_fail -fb "${set_id}" "Persistent blockset file{} not found in directory '${persist_dir}'."
+						esac
 						false
 					}
 			} &&

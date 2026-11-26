@@ -5,6 +5,18 @@ Works with the adblock-lean fork in `../adblock-lean` (upstream `next-version` l
 
 ## Changes against upstream
 
+- **Name**: the pages are titled `Adblock-lean-plus` (menu, headings); service, paths and ubus object keep the upstream names.
+- **List names**: subscriptions that are not presets get their name from the AdGuard catalog. For any other URL the user
+  can give a name (prefilled from the list's `Title:` header); it is stored after the source in `luci-subscriptions`.
+- **Input limits**: sources are an `http(s)` URL (≤ 500, `A-Za-z0-9._~:/?%+@,-`) or a short id; names ≤ 80 characters
+  with only `. , : ' ( ) / + & _ -` as ASCII punctuation. Local lists: domains only, comments with the same set plus
+  `# *`; the domain check takes a plain domain. All checked in the page and by the backend.
+- **Schedule while disabled**: `set_schedule` writes `upd_schedule` but creates no cron job unless the service is enabled.
+- **Backup / import** (overview): one JSON file (`adblock-lean-plus-backup`, version 1) with subscriptions, local lists,
+  update schedule and start at boot, built and restored through the existing methods; `set_subscriptions` gained
+  `dry_run`, so an import is validated as a whole before the first write.
+- **Router resources** (overview, `status.resources`): memory of dnsmasq and the DoH proxies, available memory, size and
+  place of the blocklist file, free flash space. Read from `/proc` and `df` when the page polls.
 - **Backend** (`root/usr/libexec/rpcd/luci.adblock-lean`), rewritten for the next-version layout:
   `global.conf` + `blockset-<id>.conf` (the first blockset), lock in `/tmp/abl-pid`, active blockset found through the
   conf-script in the dnsmasq conf-dir, per-part stats from the session log (`Successfully processed part`).
@@ -32,7 +44,7 @@ Use `../install.sh --gui root@<router>`, or by hand:
     scp -O -r luci-app-adblock-lean/htdocs/* root@<router>:/www/
     ssh root@<router> 'chmod 755 /usr/libexec/rpcd/luci.adblock-lean; rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache; /etc/init.d/rpcd reload'
 
-Then log out of LuCI and back in: Services → Adblock-lean.
+Then log out of LuCI and back in: Services → Adblock-lean-plus.
 
 ## Cost
 

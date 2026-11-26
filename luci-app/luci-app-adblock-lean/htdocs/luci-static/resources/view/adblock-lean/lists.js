@@ -92,6 +92,63 @@ function presetName(source) {
 	return null;
 }
 
+// what a list source and a list name may look like (the router checks the same)
+var SOURCE = /^(?=.{1,500}$)(https?:\/\/[A-Za-z0-9._~:\/?%+@,-]+|(hagezi|oisd|stevenblack):[A-Za-z0-9._-]+)$/;
+var NAME = /^[\p{L}\p{M}\p{N} .,:'()\/+&_\u2013-]{0,80}$/u;
+
+function badSource(source) {
+	return _('Not a usable list address: %s. Use an http(s) URL without spaces, quotes or characters such as $ ; & = ( ) *, or a short id like hagezi:pro.').format(source.slice(0, 120));
+}
+
+function badName() {
+	return _('A list name may have up to 80 letters, digits, spaces and . , : \' ( ) / + & _ -');
+}
+
+var DOMAIN = /^(?=.{1,253}$)[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
+var COMMENT = /^[\p{L}\p{M}\p{N} \t.,:'()\/+&_#*\u2013-]{0,200}$/u;
+
+// number of the first line of a local list that the router would refuse, 0 if all are fine
+function badLine(text) {
+	var lines = text.split('\n');
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i].replace(/\r$/, ''), c = line.indexOf('#'),
+		    domain = (c < 0 ? line : line.slice(0, c)).trim().toLowerCase().replace(/\.$/, '').replace(/^\*\./, '');
+		if ((domain && !DOMAIN.test(domain)) || (c >= 0 && !COMMENT.test(line.slice(c))))
+			return i + 1;
+	}
+	return 0;
+}
+
+function badLocal(list, line) {
+	return _('%s, line %d: write one domain per line (letters, digits, . _ -, optionally *.). A comment after # may have letters, digits, spaces and . , : \' ( ) / + & _ - # *').format(list, line);
+}
+
+// a name taken from a downloaded list: other characters become spaces
+function cleanName(text) {
+	return String(text || '').replace(/[^\p{L}\p{M}\p{N} .,:'()\/+&_\u2013-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).trim();
+}
+
+// show the automatic name (preset, catalog) as text, otherwise the field for the user's own name
+function showName(tr) {
+	var auto = listName(tr.querySelector('.abl-src').value.trim()),
+	    label = tr.querySelector('.abl-name'), own = tr.querySelector('.abl-title');
+	var useAuto = !!auto && !own.value.trim();
+	label.textContent = useAuto ? auto : '';
+	label.style.display = useAuto ? '' : 'none';
+	own.style.display = useAuto ? 'none' : '';
+}
+
+// names of AdGuard's catalog, by download URL; filled once the catalog is loaded
+var catalogNames = {};
+
+function listName(source) {
+	return presetName(source) || (Object.prototype.hasOwnProperty.call(catalogNames, source) ? catalogNames[source] : null);
+}
+
+function rememberNames(c) {
+	(c.filters || []).forEach(function(f) { catalogNames[f.downloadUrl] = f.name; });
+}
+
 // Guess the format from the URL; null = keep what the user picked. 'dnsmasq' = not supported.
 function guessFormat(url) {
 	if (/\/dnsmasq\/|dnsmasq/i.test(url))
@@ -110,15 +167,26 @@ return view.extend({
 		return Promise.all([ callGetSubs(), callGetLocal('allow'), callGetLocal('block') ]);
 	},
 
+	// show the names of listed subscriptions that are not presets (added from the catalog or by URL)
+	loadNames: function() {
+		return callCatalog().then(function(c) {
+			rememberNames(c);
+			Array.prototype.forEach.call(document.querySelectorAll('#abl-subs tr.abl-sub'), showName);
+		});
+	},
+
 	subRow: function(sub) {
-		var name = presetName(sub.source);
 		var tr = E('tr', { 'class': 'tr abl-sub' }, [
 			E('td', { 'class': 'td', 'style': 'width:3em;text-align:center' },
 				E('input', { 'type': 'checkbox', 'class': 'abl-en', 'checked': sub.enabled ? '' : null,
 					'title': _('Switched off subscriptions stay in the list but are not downloaded') })),
 			E('td', { 'class': 'td' }, [
-				name ? E('div', {}, E('strong', {}, name)) : '',
-				E('input', { 'type': 'text', 'class': 'cbi-input-text abl-src', 'style': 'width:100%', 'value': sub.source })
+				// a text node: the name may come from the downloaded catalog
+				E('div', { 'class': 'abl-name', 'style': 'font-weight:bold' }, ''),
+				E('input', { 'type': 'text', 'class': 'cbi-input-text abl-title', 'style': 'width:100%;margin-bottom:.25em',
+					'maxlength': 80, 'placeholder': _('Name (optional)'), 'value': sub.title || '' }),
+				E('input', { 'type': 'text', 'class': 'cbi-input-text abl-src', 'style': 'width:100%', 'maxlength': 500, 'value': sub.source,
+					'change': function(ev) { showName(ev.target.closest('tr')); } })
 			]),
 			E('td', { 'class': 'td', 'style': 'width:15em' },
 				E('select', { 'class': 'cbi-input-select abl-fmt' }, FORMATS.map(function(f) {
@@ -130,17 +198,18 @@ return view.extend({
 					row.parentNode.removeChild(row);
 				} }, _('Delete')))
 		]);
+		showName(tr);
 		return tr;
 	},
 
-	addSub: function(format, source) {
+	addSub: function(format, source, title) {
 		var tbody = document.getElementById('abl-subs');
 		var exists = Array.prototype.some.call(tbody.querySelectorAll('.abl-src'), function(i) { return i.value.trim() === source; });
 		if (exists) {
 			note(_('Already in the list: %s').format(source), 'warning');
 			return;
 		}
-		tbody.appendChild(this.subRow({ enabled: true, format: format, source: source }));
+		tbody.appendChild(this.subRow({ enabled: true, format: format, source: source, title: title }));
 	},
 
 	render: function(data) {
@@ -148,7 +217,7 @@ return view.extend({
 		var self = this;
 
 		if (subs.error)
-			return E('div', { 'class': 'alert-message warning' }, subs.error);
+			return E('div', { 'class': 'alert-message warning' }, document.createTextNode(subs.error));
 
 		var idx = 0;
 		var presetSel = E('select', { 'class': 'cbi-input-select', 'id': 'abl-preset' }, [ E('option', { 'value': '' }, _('Add a ready-made list…')) ].concat(
@@ -158,10 +227,15 @@ return view.extend({
 		var customFmt = E('select', { 'class': 'cbi-input-select', 'id': 'abl-custom-fmt' }, FORMATS.map(function(f) {
 			return E('option', { 'value': f[0] }, f[1]);
 		}));
-		var customSrc = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'id': 'abl-custom-src', 'placeholder': 'https://…', 'style': 'min-width:24em;flex:1' });
+		var customSrc = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'id': 'abl-custom-src', 'maxlength': 500, 'placeholder': 'https://…', 'style': 'min-width:24em;flex:1' });
+		var customName = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'id': 'abl-custom-name', 'maxlength': 80, 'placeholder': _('Name (optional)') });
+
+		// after the page is shown: the router may have to download the catalog first
+		if ((subs.subscriptions || []).some(function(s) { return /^https?:/.test(s.source) && !presetName(s.source); }))
+			window.setTimeout(function() { self.loadNames(); }, 0);
 
 		return E([], [
-			E('h2', {}, _('Adblock-lean: subscriptions')),
+			E('h2', {}, _('Adblock-lean-plus: subscriptions')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('p', { 'class': 'cbi-value-description' },
 					_('Tick to use a list, untick to switch it off without deleting it. Changes take effect on the next list update (Save & Apply runs it now). More lists means more memory for dnsmasq. The format of a URL is guessed when you add it; check it before saving.')),
@@ -185,7 +259,7 @@ return view.extend({
 					E('button', { 'class': 'cbi-button cbi-button-action', 'click': ui.createHandlerFn(self, 'handleCatalog') }, _('AdGuard catalog…'))
 				]),
 				E('div', { 'style': 'display:flex;gap:.5em;flex-wrap:wrap;align-items:center;margin-top:.5em' }, [
-					customSrc, customFmt,
+					customName, customSrc, customFmt,
 					E('button', { 'class': 'cbi-button cbi-button-add', 'click': ui.createHandlerFn(self, 'handleAddUrl') }, _('Add URL'))
 				])
 			]),
@@ -207,6 +281,10 @@ return view.extend({
 		var self = this, input = document.getElementById('abl-custom-src'), src = input.value.trim();
 		if (!src)
 			return;
+		if (!SOURCE.test(src))
+			return note(badSource(src), 'error');
+		if (!NAME.test(document.getElementById('abl-custom-name').value.trim()))
+			return note(badName(), 'error');
 		var DNSMASQ = _('dnsmasq-format lists are not supported: adblock-lean builds the dnsmasq format itself. Use the "wildcard"/"domains" (plain domains) or "adblock" (AdGuard syntax) version of the same list.');
 		return callDetect(src).then(function(r) {
 			var fmt;
@@ -229,8 +307,12 @@ return view.extend({
 			}
 			if (fmt)
 				document.getElementById('abl-custom-fmt').value = fmt;
-			self.addSub(document.getElementById('abl-custom-fmt').value, src);
+			// the user's name; else the automatic one (preset, catalog) or the title from the list itself
+			var nameInput = document.getElementById('abl-custom-name'),
+			    name = nameInput.value.trim() || (listName(src) ? '' : cleanName(r.ok && r.title));
+			self.addSub(document.getElementById('abl-custom-fmt').value, src, name);
 			input.value = '';
+			nameInput.value = '';
 		});
 	},
 
@@ -243,6 +325,7 @@ return view.extend({
 				note(c.error || _('Could not load the AdGuard list catalog'), 'error');
 				return;
 			}
+			rememberNames(c);
 			var groups = (c.groups || []).slice().sort(function(a, b) { return a.displayNumber - b.displayNumber; });
 			var body = groups.map(function(g) {
 				var items = c.filters.filter(function(f) { return f.groupId === g.groupId && !f.deprecated; })
@@ -278,15 +361,35 @@ return view.extend({
 
 	collectSubs: function() {
 		return Array.prototype.map.call(document.querySelectorAll('#abl-subs tr.abl-sub'), function(tr) {
+			var name = tr.querySelector('.abl-title').value.replace(/\s+/g, ' ').trim();
 			return [ tr.querySelector('.abl-en').checked ? '1' : '0', tr.querySelector('.abl-fmt').value,
-				tr.querySelector('.abl-src').value.trim() ].join(' ');
+				tr.querySelector('.abl-src').value.trim() ].concat(name ? [ name ] : []).join(' ');
 		}).join('\n');
 	},
 
+	// the first row with a source or name the router would refuse
+	invalidRow: function() {
+		var rows = document.querySelectorAll('#abl-subs tr.abl-sub');
+		for (var i = 0; i < rows.length; i++) {
+			var src = rows[i].querySelector('.abl-src').value.trim();
+			if (!SOURCE.test(src))
+				return badSource(src);
+			if (!NAME.test(rows[i].querySelector('.abl-title').value.replace(/\s+/g, ' ').trim()))
+				return badName();
+		}
+		return null;
+	},
+
 	save: function(thenUpdate) {
+		var invalid = this.invalidRow();
+		if (invalid)
+			return Promise.reject(new Error(invalid));
 		var subs = this.collectSubs(),
 		    allow = document.getElementById('abl-allow').value,
-		    block = document.getElementById('abl-block').value;
+		    block = document.getElementById('abl-block').value,
+		    allowLine = badLine(allow), blockLine = badLine(block);
+		if (allowLine || blockLine)
+			return Promise.reject(new Error(allowLine ? badLocal(_('Allowlist'), allowLine) : badLocal(_('Blocklist'), blockLine)));
 		// validate both local lists first, so a bad line does not leave a half-saved page
 		return Promise.all([ callSetLocal('allow', allow, 1), callSetLocal('block', block, 1) ]).then(function(r) {
 			if (!r[0].ok)

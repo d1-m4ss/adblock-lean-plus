@@ -31,7 +31,7 @@ wget https://raw.githubusercontent.com/Wildside-UK/luci-app-adblock-lean/refs/he
 apk add --allow-untrusted /tmp/luci-app-adblock-lean.apk
 ```
 
-Log out of LuCI and back in. The pages are under Services, Adblock-lean.
+Log out of LuCI and back in. The pages are under Services, Adblock-lean-plus.
 
 To remove it: `apk del luci-app-adblock-lean`
 

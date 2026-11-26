@@ -28,7 +28,7 @@ return view.extend({
 			});
 		}, 10);
 		return E([], [
-			E('h2', {}, _('Adblock-lean: log')),
+			E('h2', {}, _('Adblock-lean-plus: log')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('Most recent session')),
 				pre('abl-session', lg.session)

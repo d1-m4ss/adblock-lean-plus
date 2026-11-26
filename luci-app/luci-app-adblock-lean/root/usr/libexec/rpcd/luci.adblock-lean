@@ -182,11 +182,12 @@ norm_source() {
 	esac
 }
 
-# Allowlist of characters: anything else (quotes, '=', '$', spaces, control characters...) would break
-# the key="value" config line or adblock-lean's config parser.
+# Allowlist of characters for a URL or short id, at most 500: nothing a shell or adblock-lean's config
+# parser could act on (quotes, '=', '$', backticks, ';', '&', '|', '<', '>', globs, spaces, control characters).
 valid_source() {
+	[ "${#1}" -le 500 ] || return 1
 	case "$1" in
-		''|*[!A-Za-z0-9._~:/?%+@,!*\(\)-]*) return 1 ;;
+		''|*[!A-Za-z0-9._~:/?%+@,-]*) return 1 ;;
 		http://?*|https://?*) return 0 ;;
 	esac
 	case "$2:$1" in
@@ -195,31 +196,48 @@ valid_source() {
 	return 1
 }
 
+# A name given to a list: at most 80 characters; of ASCII only letters, digits, space and . , : ' ( ) / + & _ -
+# (no shell or HTML metacharacters). Non-ASCII bytes pass, so names in other alphabets work.
+valid_title() {
+	[ "${#1}" -le 320 ] || return 1
+	[ "$(printf '%s' "$1" | LC_ALL=C tr -d '\200-\277' | wc -c)" -le 80 ] || return 1
+	case "$(printf '%s' "$1" | LC_ALL=C tr -d '\200-\377')" in
+		*[!A-Za-z0-9\ .,:\'\(\)/+\&_-]*) return 1 ;;
+	esac
+	return 0
+}
+
+# is "<format> <source>" in the subscriptions file $1 (on or off, with or without a name)?
+sub_listed() {
+	awk -v f="$2" -v s="$3" '$2 == f && $3 == s { found = 1 } END { exit !found }' "$1"
+}
+
 # Bring the subscriptions file in line with the config: the config decides what is enabled
 # (it may have been edited by hand or by 'service adblock-lean setup'); entries switched off in
 # LuCI stay in the file as off; config entries missing from the file are added as on.
+# A line is "<1|0> <format> <source>[ <name given by the user>]".
 sync_subs() {
-	local cfg fmt key src en tmp vals tok
+	local cfg fmt key src en tmp vals tok title
 	cfg=$(set_cfg) || return 1
 	tmp=$(mktemp "$SUBS_FILE.XXXXXX") || return 1
 	{
-		[ -f "$SUBS_FILE" ] && while read -r en fmt src; do
+		[ -f "$SUBS_FILE" ] && while read -r en fmt src title; do
 			[ -n "$src" ] || continue
 			key=$(key_for_format "$fmt") || continue
 			vals=" "
 			set -f
 			for tok in $(cfg_get "$cfg" "$key"); do vals="$vals$(norm_source "$tok") "; done
 			set +f
-			case "$vals" in *" $src "*) echo "1 $fmt $src" ;; *) echo "0 $fmt $src" ;; esac
+			case "$vals" in *" $src "*) en=1 ;; *) en=0 ;; esac
+			printf '%s\n' "$en $fmt $src${title:+ $title}"
 		done < "$SUBS_FILE"
 		for fmt in $ALL_FORMATS; do
 			key=$(key_for_format "$fmt")
 			set -f
 			for src in $(cfg_get "$cfg" "$key"); do
 				src=$(norm_source "$src")
-				[ -f "$SUBS_FILE" ] && grep -qxF "1 $fmt $src" "$SUBS_FILE" && continue
-				[ -f "$SUBS_FILE" ] && grep -qxF "0 $fmt $src" "$SUBS_FILE" && continue
-				echo "1 $fmt $src"
+				[ -f "$SUBS_FILE" ] && sub_listed "$SUBS_FILE" "$fmt" "$src" && continue
+				printf '%s\n' "1 $fmt $src"
 			done
 			set +f
 		done
@@ -227,6 +245,36 @@ sync_subs() {
 	# rewrite only when something changed (flash writes)
 	if [ -f "$SUBS_FILE" ] && cmp -s "$tmp" "$SUBS_FILE"; then rm -f "$tmp"; return 0; fi
 	mv "$tmp" "$SUBS_FILE" || { rm -f "$tmp"; return 1; }
+}
+
+# resident memory of all processes with this name, kB
+rss_of() {
+	local p kb=0 v
+	for p in $(pidof "$1" 2>/dev/null); do
+		v=$(awk '/^VmRSS:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+		kb=$((kb + ${v:-0}))
+	done
+	echo "$kb"
+}
+
+# memory of the DNS processes, the blocklist file and free space; sizes in kB. $1: active blockset file or empty
+json_resources() {
+	local size=0 flash=0 overlay
+	if [ -n "$1" ]; then
+		size=$(ls -ln "$1" 2>/dev/null | awk '{ print int(($5 + 1023) / 1024) }')
+		case "$1" in /tmp/*|/var/*) ;; *) flash=1 ;; esac
+	fi
+	json_add_object resources
+	json_add_int mem_total "$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)"
+	json_add_int mem_available "$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+	json_add_int dnsmasq_rss "$(rss_of dnsmasq)"
+	json_add_int doh_rss "$(rss_of https-dns-proxy)"
+	json_add_int blockset_size "${size:-0}"
+	json_add_boolean blockset_on_flash "$flash"
+	overlay=$(df -Pk /overlay 2>/dev/null | awk 'NR == 2 { print $2, $4 }')
+	json_add_int flash_total "$(echo "$overlay" | awk '{ print $1 + 0 }')"
+	json_add_int flash_free "$(echo "$overlay" | awk '{ print $2 + 0 }')"
+	json_close_object
 }
 
 m_status() {
@@ -265,6 +313,7 @@ m_status() {
 		done < "$CACHE_DIR/lists"
 	fi
 	json_close_array
+	json_resources "$f"
 	json_dump
 }
 
@@ -282,7 +331,7 @@ m_check() {
 	read -r input
 	json_load "$input"
 	json_get_var domain domain
-	domain=$(echo "$domain" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/\.$//')
+	domain=$(printf '%s\n' "$domain" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/\.$//')
 	json_init
 	if ! valid_domain "$domain"; then
 		json_add_string error "not a valid domain name"
@@ -353,43 +402,45 @@ m_action() {
 }
 
 m_get_subscriptions() {
-	local en fmt src
+	local en fmt src title
 	sync_subs || { reply_fail "no blockset config in $ABL_CFG_DIR"; return; }
 	json_init
 	json_add_array subscriptions
-	while read -r en fmt src; do
+	while read -r en fmt src title; do
 		[ -n "$fmt" ] || continue
 		json_add_object
 		json_add_boolean enabled "$en"
 		json_add_string format "$fmt"
 		json_add_string source "$src"
+		[ -z "$title" ] || json_add_string title "$title"
 		json_close_object
 	done < "$SUBS_FILE"
 	json_close_array
 	json_dump
 }
 
-# text: one subscription per line, "<1|0> <format> <source>". Rewrites the list keys of the blockset
+# text: one subscription per line, "<1|0> <format> <source>[ <name>]". Rewrites the list keys of the blockset
 # config (enabled entries only, one atomic write) and then the subscriptions file. Takes effect on the
-# next list update.
+# next list update. dry_run=1 only validates.
 m_set_subscriptions() {
-	local text en fmt src rest n=0 tmp cfg fail='' wl key vals
+	local text dry en fmt src title n=0 tmp cfg fail='' wl key vals
 	read -r input
 	json_load "$input"
 	json_get_var text text
-	is_busy && { reply_fail "adblock-lean is busy, try again when it has finished"; return; }
+	json_get_var dry dry_run
+	[ "$dry" = 1 ] || ! is_busy || { reply_fail "adblock-lean is busy, try again when it has finished"; return; }
 	cfg=$(set_cfg) || { reply_fail "no blockset config"; return; }
 	tmp=$(mktemp "$SUBS_FILE.XXXXXX") || { reply_fail "can not create a temp file in $ABL_CFG_DIR"; return; }
-	while read -r en fmt src rest; do
+	while read -r en fmt src title; do
 		[ -n "$en$fmt$src" ] || continue
 		n=$((n + 1))
 		case "$en" in 0|1) ;; *) fail="line $n: enabled must be 0 or 1"; break ;; esac
 		key_for_format "$fmt" >/dev/null || { fail="line $n: unknown format '$fmt'"; break; }
-		[ -z "$rest" ] || { fail="line $n: unexpected text after the source"; break; }
+		valid_title "$title" || { fail="line $n: the name may have up to 80 letters, digits, spaces and . , : ' ( ) / + & _ -"; break; }
 		src=$(norm_source "$src")
 		valid_source "$src" "$fmt" || { fail="line $n: unsupported source '$src' for format $fmt"; break; }
-		{ grep -qxF "1 $fmt $src" "$tmp" || grep -qxF "0 $fmt $src" "$tmp"; } && { fail="line $n: duplicate '$src'"; break; }
-		echo "$en $fmt $src" >> "$tmp" || { fail="can not write $tmp"; break; }
+		sub_listed "$tmp" "$fmt" "$src" && { fail="line $n: duplicate '$src'"; break; }
+		printf '%s\n' "$en $fmt $src${title:+ $title}" >> "$tmp" || { fail="can not write $tmp"; break; }
 	done <<-EOF
 	$text
 	EOF
@@ -404,6 +455,7 @@ m_set_subscriptions() {
 	for key in $LIST_KEYS; do
 		grep -q "^[[:space:]]*$key=\"" "$cfg" || { rm -f "$tmp"; reply_fail "$key is missing from $cfg"; return; }
 	done
+	[ "$dry" = 1 ] && { rm -f "$tmp"; json_init; json_add_boolean ok 1; json_dump; return; }
 	set --
 	for fmt in $ALL_FORMATS; do
 		key=$(key_for_format "$fmt")
@@ -440,8 +492,9 @@ m_get_local() {
 }
 
 # Lines are kept as they are when they are comments ('#...') or empty; every other line must be a
-# domain, optionally '*.domain' and with a trailing comment. Nothing is written unless every line is
-# valid. dry_run=1 only validates.
+# domain, optionally '*.domain' and with a trailing comment. A comment may hold, of ASCII, only letters,
+# digits, spaces and . , : ' ( ) / + & _ - # * (no shell or HTML metacharacters); other alphabets pass.
+# Nothing is written unless every line is valid. dry_run=1 only validates.
 m_set_local() {
 	local kind text dry p bad tmp cfg
 	read -r input
@@ -455,15 +508,20 @@ m_set_local() {
 	tmp=$(mktemp "$ABL_CFG_DIR/.luci-local.XXXXXX") || { reply_fail "can not create a temp file in $ABL_CFG_DIR"; return; }
 	# one awk pass: keep comment and empty lines, normalise domains ('*.' allowed, trailing dot and
 	# CR dropped, lowercase, trailing comment kept), collect invalid entries, drop trailing empty lines
-	bad=$(printf '%s\n' "$text" | awk -v out="$tmp" '
+	bad=$(printf '%s\n' "$text" | LC_ALL=C awk -v out="$tmp" '
 		{
 			sub(/\r$/, "")
 			line = $0; c = index(line, "#"); com = ""
 			if (c) { com = substr(line, c); d = substr(line, 1, c - 1) } else d = line
+			if (com != "") {
+				rest = com; gsub(/[A-Za-z0-9 \t.,:\047()\/+&_#*-]/, "", rest)
+				# BusyBox awk counts the backslash of "\/" as a member of the bracket above: test it separately
+				if (length(com) > 800 || rest ~ /[\001-\177]/ || index(com, "\\")) { bad = bad " line " NR " (comment)"; next }
+			}
 			gsub(/^[ \t]+|[ \t]+$/, "", d); d = tolower(d); sub(/\.$/, "", d)
 			if (d != "") {
 				dd = d; sub(/^\*\./, "", dd)
-				if (dd !~ /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/ || length(dd) > 253) { bad = bad " " d; next }
+				if (dd !~ /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/ || length(dd) > 253) { bad = bad " line " NR " (" substr(d, 1, 60) ")"; next }
 				line = (com != "") ? d " " com : d
 			}
 			a[++n] = line
@@ -475,7 +533,7 @@ m_set_local() {
 			if (last && close(out) != 0) exit 2
 			printf "%s", bad
 		}') || { rm -f "$tmp"; reply_fail "can not write $tmp"; return; }
-	[ -n "$bad" ] && { rm -f "$tmp"; reply_fail "not domain names:$bad"; return; }
+	[ -n "$bad" ] && { rm -f "$tmp"; reply_fail "not a domain name or a character that is not allowed:$bad"; return; }
 	if [ "$dry" = 1 ]; then
 		rm -f "$tmp"
 	else
@@ -514,6 +572,16 @@ m_set_schedule() {
 			sched="${m:-0} ${h:-0} * * *" ;;
 	esac
 	cfg_set_many "$GLOBAL_CFG" "upd_schedule=$sched" || { reply_fail "could not write upd_schedule to $GLOBAL_CFG"; return; }
+	# a service that does not start at boot gets no cron job (it would start blocking); 'enable' creates it
+	if [ ! -L /etc/rc.d/S99adblock-lean ]; then
+		# remove a job left over from an earlier version, through adblock-lean itself
+		if crontab -l 2>/dev/null | grep -q 'adblock-lean start'; then
+			cfg_set_many "$GLOBAL_CFG" "upd_schedule=disable" && "$ABL_SERVICE" upd_cron_job >/dev/null 2>&1
+			cfg_set_many "$GLOBAL_CFG" "upd_schedule=$sched" || { reply_fail "could not write upd_schedule to $GLOBAL_CFG"; return; }
+		fi
+		json_init; json_add_boolean ok 1; json_add_string cron ''; json_dump
+		return
+	fi
 	"$ABL_SERVICE" upd_cron_job >/dev/null 2>&1
 	cron=$(crontab -l 2>/dev/null | grep -m1 'adblock-lean' | awk '{print $1,$2,$3,$4,$5}')
 	json_init
@@ -530,7 +598,7 @@ m_set_schedule() {
 # Counts rule lines by syntax; reports the share that adblock-lean can use, so browser-only lists
 # (cosmetic rules, URL parameters, paths) can be recognised before they are added.
 m_detect_format() {
-	local url res
+	local url res title
 	read -r input
 	json_load "$input"
 	json_get_var url url
@@ -539,6 +607,7 @@ m_detect_format() {
 	valid_source "$url" adguard || { reply_fail "unsupported characters in the URL"; return; }
 	res=$(uclient-fetch -q -T 15 -O - "$url" 2>/dev/null | head -c 65536 | awk '
 		{ sub(/\r$/, ""); l = $0; sub(/^[ \t]+/, "", l); sub(/[ \t]+$/, "", l) }
+		title == "" && l ~ /^[!#][ \t]*Title:/ { title = l; sub(/^[!#][ \t]*Title:[ \t]*/, "", title); gsub(/[[:cntrl:]]/, " ", title) }
 		l == "" || l ~ /^[!#\[]/ { next }
 		{ n++ }
 		l ~ /^(local|server|address)=\// { dnsmasq++; next }
@@ -546,11 +615,13 @@ m_detect_format() {
 		l ~ /^(@@)?\|\|?[A-Za-z0-9._-]+\^?\|?(\$(important|dnsrewrite=[^,]*)(,(important|dnsrewrite=[^,]*))*)?$/ { adg++; next }
 		l ~ /^[A-Za-z0-9*._-]+$/ && l ~ /\./ { raw++; next }
 		{ other++ }
-		END { printf "%d %d %d %d %d %d", n, adg, hosts, raw, dnsmasq, other }')
-	set -- $res
+		END { printf "%d %d %d %d %d %d\n%s", n, adg, hosts, raw, dnsmasq, other, substr(title, 1, 300) }')
+	title=$(printf '%s\n' "$res" | sed -n 2p)
+	set -f; set -- $(printf '%s\n' "$res" | sed -n 1p); set +f
 	json_init
 	[ "${1:-0}" -gt 0 ] || { json_add_boolean ok 0; json_add_string error "could not download the list or it has no rules"; json_dump; return; }
 	json_add_boolean ok 1
+	[ -z "$title" ] || json_add_string title "$title"
 	json_add_int rules "$1"; json_add_int adguard "$2"; json_add_int hosts "$3"; json_add_int raw "$4"
 	json_add_int dnsmasq "$5"; json_add_int unusable "$6"
 	# the most frequent usable syntax; AdGuard syntax also covers hosts and plain-domain lines
@@ -591,7 +662,7 @@ case "$1" in
 		json_add_object check; json_add_string domain str; json_close_object
 		json_add_object action; json_add_string name str; json_close_object
 		json_add_object get_subscriptions; json_close_object
-		json_add_object set_subscriptions; json_add_string text str; json_close_object
+		json_add_object set_subscriptions; json_add_string text str; json_add_int dry_run 0; json_close_object
 		json_add_object get_local; json_add_string kind str; json_close_object
 		json_add_object set_local; json_add_string kind str; json_add_string text str; json_add_int dry_run 0; json_close_object
 		json_add_object set_schedule; json_add_string schedule str; json_close_object

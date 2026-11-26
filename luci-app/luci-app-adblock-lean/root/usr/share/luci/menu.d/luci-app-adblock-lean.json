@@ -1,6 +1,6 @@
 {
 	"admin/services/adblock-lean": {
-		"title": "Adblock-lean",
+		"title": "Adblock-lean-plus",
 		"order": 60,
 		"action": {
 			"type": "alias",

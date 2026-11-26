@@ -1,6 +1,6 @@
 {
 	"luci-app-adblock-lean": {
-		"description": "Grant access to adblock-lean",
+		"description": "Grant access to adblock-lean-plus",
 		"read": {
 			"ubus": {
 				"luci.adblock-lean": [ "status", "check", "log", "get_subscriptions", "get_local", "get_catalog" ]
