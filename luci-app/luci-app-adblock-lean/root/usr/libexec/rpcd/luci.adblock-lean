@@ -150,7 +150,23 @@ entries_count() {
 	echo "$cached"
 }
 
-# Per-part lines from the newest session log that processed parts, kept in the cache
+# Domains of the allow entries ('server=/.../#') in the blockset file $1: the entries count includes them.
+# Counted once per blockset file.
+allow_count() {
+	local mt cached
+	mt="$(date -r "$1" +%s)$1"
+	mkdir -p "$CACHE_DIR"
+	if [ -f "$CACHE_DIR/allow" ]; then
+		read -r cached < "$CACHE_DIR/allow"
+		[ "${cached%% *}" = "$mt" ] && { echo "${cached#* }"; return; }
+	fi
+	cached=$(cat_blockset "$1" | awk -F/ '/^server=\//{n+=NF-2} END{print n+0}')
+	echo "$mt $cached" > "$CACHE_DIR/allow"
+	echo "$cached"
+}
+
+# Per-part lines from the newest session log that processed parts and installed the result (the figures of a
+# failed update would not belong to the blockset in use), kept in the cache
 #   Successfully processed part:    <id>   [ 4.73 MiB  -   251,436 entries ]
 refresh_list_stats() {
 	local log stamp
@@ -158,6 +174,7 @@ refresh_list_stats() {
 	for log in "$ABL_SESSION_LOG" "$ABL_SESSION_LOG.0"; do
 		[ -s "$log" ] || continue
 		grep -q 'Successfully processed part:' "$log" || continue
+		grep -q 'Successfully installed blockset files' "$log" || continue
 		stamp=$(date -r "$log" +%s)
 		if [ -f "$CACHE_DIR/lists.stamp" ] && [ "$(cat "$CACHE_DIR/lists.stamp")" -ge "$stamp" ]; then
 			return
@@ -294,6 +311,7 @@ m_status() {
 	json_add_boolean early_boot "$([ -x /etc/init.d/adblock-lean-early ] && echo 1 || echo 0)"
 	json_add_string state "$state"
 	json_add_int entries "$( [ "$state" = active ] && entries_count || echo 0)"
+	json_add_int allow_entries "$( [ "$state" = active ] && [ -n "$f" ] && allow_count "$f" || echo 0)"
 	json_add_int updated "$ts"
 	json_add_int now "$(date +%s)"
 	json_add_boolean dnsmasq_running "$(pidof dnsmasq >/dev/null && echo 1 || echo 0)"

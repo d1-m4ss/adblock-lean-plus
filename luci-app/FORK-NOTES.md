@@ -6,6 +6,10 @@ Works with the adblock-lean fork in `../adblock-lean` (upstream `next-version` l
 ## Changes against upstream
 
 - **Name**: the pages are titled `Adblock-lean-plus` (menu, headings); service, paths and ubus object keep the upstream names.
+- **Overlap**: the Lists table shows the entries of all block lists together, how many of them were removed before
+  dnsmasq (duplicates and allowed domains) and the allow rules loaded with the rest (`status.allow_entries`, counted
+  once per blockset). Not shown in allowlist-only mode. Per-list figures come only from updates that installed their
+  blockset.
 - **List names** (`view/adblock-lean/names.js`, both pages): every list shows a name and its address; presets are named
   locally, other subscriptions from the AdGuard catalog. For any other URL the user
   can give a name (prefilled from the list's `Title:` header); it is stored after the source in `luci-subscriptions`.

@@ -105,6 +105,11 @@ function usageBar(parts, total) {
 	]);
 }
 
+// a list address as a key: short ids are case-insensitive
+function listKey(source) {
+	return /^https?:/i.test(source) ? source : source.toLowerCase();
+}
+
 function row(label, value) {
 	return E('tr', { 'class': 'tr' }, [
 		E('td', { 'class': 'td left', 'width': '33%' }, label),
@@ -204,9 +209,13 @@ return view.extend({
 	loadNames: function() {
 		var self = this;
 		return callGetSubs().then(function(r) {
-			var own = Object.create(null);
-			(r.subscriptions || []).forEach(function(s) { if (s.title) own[s.source] = s.title; });
+			var own = Object.create(null), allow = Object.create(null);
+			(r.subscriptions || []).forEach(function(s) {
+				if (s.title) own[s.source] = s.title;
+				if (s.format === 'raw_allow') allow[listKey(s.source)] = true;
+			});
 			self.ownNames = own;
+			self.allowSources = allow;
 			var unnamed = ((self.status || {}).lists || []).some(function(l) {
 				return /^https?:/.test(l.name) && !own[l.name] && !listnames.name(l.name);
 			});
@@ -252,6 +261,29 @@ return view.extend({
 				E('td', { 'class': 'td right' }, l.size.replace(/\s+/g, ' '))
 			]));
 		});
+		// how much the block lists overlap. The total below counts the allow rules too, so:
+		// lists together - removed + allow rules = total. Not shown in allowlist-only mode (block lists are
+		// then dropped almost entirely) nor before it is known which lists are allowlists.
+		var together = st.lists.reduce(function(sum, l) {
+			var allow = /\/local-allowlist/.test(l.name) || (self.allowSources && self.allowSources[listKey(l.name)]);
+			return allow ? sum : sum + (+l.lines || 0);
+		}, 0);
+		var allowRules = +st.allow_entries || 0, blocked = st.entries - allowRules, removed = together - blocked;
+		var figure = function(label, value) {
+			return E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td' }, label),
+				E('td', { 'class': 'td right' }, value),
+				E('td', { 'class': 'td' }, '')
+			]);
+		};
+		if (st.state === 'active' && st.whitelist_mode !== '1' && st.allow_entries !== undefined && self.allowSources &&
+		    blocked > 0 && removed > 0) {
+			rows.push(figure(_('All block lists together'), fmtInt(together)));
+			rows.push(figure(_('Removed: duplicates and allowed domains'),
+				'\u2212' + fmtInt(removed) + ' (' + Math.round(100 * removed / together) + '%)'));
+			if (allowRules)
+				rows.push(figure(_('Allow rules loaded as well'), '+' + fmtInt(allowRules)));
+		}
 		rows.push(E('tr', { 'class': 'tr' }, [
 			E('td', { 'class': 'td' }, E('strong', {}, _('In dnsmasq after merging duplicates'))),
 			E('td', { 'class': 'td right' }, E('strong', {}, fmtInt(st.entries))),
@@ -260,7 +292,7 @@ return view.extend({
 		return E([], [
 			E('table', { 'class': 'table' }, rows),
 			E('p', { 'class': 'cbi-value-description' },
-				_('From the list update at %s. Lists overlap, so the total is less than the sum.').format(new Date(st.lists_at * 1000).toLocaleString()))
+				_('From the list update at %s.').format(new Date(st.lists_at * 1000).toLocaleString()))
 		]);
 	},
 

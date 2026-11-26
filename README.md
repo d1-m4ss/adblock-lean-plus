@@ -23,7 +23,7 @@ missing pieces together:
 | 🖱️ The existing LuCI app was written for adblock-lean 0.8.1 | reworked pages: subscriptions you can switch off, AdGuard's list catalog, status, router resources, backup |
 | 🔐 Encrypted DNS set up by hand | the installer adds three DoH proxies, switches dnsmasq to them and rolls back if DNS stops working |
 | 📦 Several projects to install and wire together | one installer that looks at your router, asks, shows the plan and then installs |
-| ⬆️ `sysupgrade` forgets the setup | scripts and settings are kept while "start at boot" is on |
+| ⬆️ `sysupgrade` forgets the setup | scripts and settings are kept while "start at boot" is on (untested on a real upgrade, see [Requirements](#-requirements)) |
 
 **What you give up** compared with AdGuard Home: the query log, statistics and per-client settings. Blocking is
 silent: dnsmasq does not log queries, adblock-lean logs only its own updates.
@@ -92,10 +92,14 @@ Rendered from this repository's view files with data captured from a router runn
 
 ## ✅ Requirements
 
-- OpenWrt with dnsmasq 2.86 or newer (OpenWrt 23.05+), `apk` or `opkg`.
+- OpenWrt 23.05 or newer (adblock-lean's minimum) with dnsmasq 2.86+, `apk` or `opkg`.
 - About 6 MB free on `/overlay` (+15 MB with `--persist`). The list preset follows the router's RAM, as in adblock-lean:
   mini (64 MB), small (128 MB), medium (256 MB), large (512 MB), huge (1 GB: HaGeZi Pro + TIF full).
 - LuCI for the web pages (optional).
+
+> ⚠️ **Tested on one router only:** GL.iNet GL-MT6000 (Flint 2), OpenWrt 25.12.6 with `apk`. Older OpenWrt releases,
+> `opkg`, other hardware and a real firmware upgrade are **untested**: save a router backup first, and reports are
+> welcome.
 
 ## 🚀 Install, update, uninstall
 
@@ -183,6 +187,9 @@ The speed-up tools (gawk, sed, coreutils-sort) are ordinary OpenWrt packages and
 
 <details>
 <summary><b>After an OpenWrt firmware upgrade</b></summary>
+
+Not tested on a real firmware upgrade yet: what follows is how it is built to behave. Save a router backup and a
+[backup](#backup-and-import) of the plugin settings first.
 
 Upgrade OpenWrt with Attended Sysupgrade (LuCI: System → Attended Sysupgrade, or `owut`), which builds an image that
 includes your installed packages. Then run `adblock-lean-plus-update`: the web pages are not kept by a firmware
@@ -363,6 +370,7 @@ This project is mostly other people's good work, put together:
 | [HaGeZi DNS blocklists](https://github.com/hagezi/dns-blocklists) | HaGeZi | the default lists |
 | [AdGuard Hostlists Registry](https://github.com/AdguardTeam/HostlistsRegistry) | AdGuard and list authors | AdGuard DNS filter and the list catalog |
 | [OISD](https://oisd.nl), [Steven Black's hosts](https://github.com/StevenBlack/hosts), [Dandelion Sprout](https://github.com/DandelionSprout/adfilt) | their authors | ready-made lists |
+| [cbuijs/hagezi](https://github.com/cbuijs/hagezi) | cbuijs | a ready-made combined list |
 | [yokoffing/filterlists](https://github.com/yokoffing/filterlists) | yokoffing | recommendations behind the preset selection |
 | [dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html) and [OpenWrt](https://openwrt.org) | Simon Kelley, the OpenWrt developers | what it all runs on |
 
