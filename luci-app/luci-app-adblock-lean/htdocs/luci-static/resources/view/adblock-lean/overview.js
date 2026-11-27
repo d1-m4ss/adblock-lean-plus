@@ -7,6 +7,7 @@
 'require poll';
 'require dom';
 'require view.adblock-lean.names as listnames';
+'require view.adblock-lean.liststatus as liststatus';
 
 var callStatus = rpc.declare({ object: 'luci.adblock-lean', method: 'status', expect: { '': {} } });
 var callAction = rpc.declare({ object: 'luci.adblock-lean', method: 'action', params: [ 'name' ], expect: { '': {} } });
@@ -216,27 +217,54 @@ return view.extend({
 			});
 			self.ownNames = own;
 			self.allowSources = allow;
-			var unnamed = ((self.status || {}).lists || []).some(function(l) {
+			var st = self.status || {};
+			var unnamed = (st.lists || []).concat(st.list_status || []).some(function(l) {
 				return /^https?:/.test(l.name) && !own[l.name] && !listnames.name(l.name);
 			});
 			if (unnamed)
 				return callCatalog().then(function(c) { listnames.remember(c); });
 		}).then(function() {
 			var box = document.getElementById('abl-lists');
-			if (box && self.status)
+			if (box && self.status) {
 				dom.content(box, self.renderLists(self.status));
+				dom.content(document.getElementById('abl-alerts'), self.renderAlerts(self.status));
+			}
 		}).catch(function() {
 			// without the names the table still shows the addresses
 		});
 	},
 
+	// the name shown for a list, or null
+	listName: function(source) {
+		if (source.indexOf('/') === 0)
+			return /\/local-allowlist/.test(source) ? _('Your allowlist') : /\/local-blocklist/.test(source) ? _('Your blocklist') : _('Local list');
+		return (this.ownNames && this.ownNames[source]) || listnames.name(source);
+	},
+
+	// problems of the newest update: nothing when all is well
+	renderAlerts: function(st) {
+		var self = this, texts = [];
+		var failed = (st.list_status || []).filter(function(s) { return !s.ok; });
+		if (st.run_at && !st.run_ok)
+			texts.push(_('The list update of %s did not install new lists.').format(new Date(st.run_at * 1000).toLocaleString()) +
+				(st.state === 'active' ? ' ' + _('The previous block set is still in use.') : ''));
+		if (failed.length) {
+			var named = failed.slice(0, 3).map(function(s) {
+				return '%s (%s)'.format(self.listName(s.name) || s.name, liststatus.reason(s.reason));
+			});
+			if (failed.length > named.length)
+				named.push(_('and %d more').format(failed.length - named.length));
+			texts.push(_('Lists that failed to download: %d. %s. Check their addresses on the Lists page.').format(failed.length, named.join(', ')));
+		}
+		// text nodes: list names come from the user and from downloads
+		return E([], texts.map(function(t) {
+			return E('div', { 'class': 'alert-message warning', 'style': 'word-break:break-word' }, [ t ]);
+		}));
+	},
+
 	// every list the same way: its name in bold and its address (or file) below
 	listCell: function(source) {
-		var local = source.indexOf('/') === 0, name;
-		if (local)
-			name = /\/local-allowlist/.test(source) ? _('Your allowlist') : /\/local-blocklist/.test(source) ? _('Your blocklist') : _('Local list');
-		else
-			name = (this.ownNames && this.ownNames[source]) || listnames.name(source);
+		var name = this.listName(source);
 		// text nodes: names and addresses come from files and downloads
 		return E('td', { 'class': 'td', 'style': 'word-break:break-all' }, [
 			name ? E('div', {}, E('strong', {}, document.createTextNode(name))) : '',
@@ -245,7 +273,12 @@ return view.extend({
 	},
 
 	renderLists: function(st) {
-		if (!st.lists || !st.lists.length)
+		var results = liststatus.map(st.list_status), shown = Object.create(null);
+		var lists = st.lists || [];
+		lists.forEach(function(l) { shown[liststatus.key(l.name)] = true; });
+		// failed lists have no figures in the log: they get a row of their own
+		var missing = (st.list_status || []).filter(function(s) { return !s.ok && !shown[liststatus.key(s.name)]; });
+		if (!lists.length && !missing.length)
 			return E('p', { 'class': 'cbi-value-description' }, _('No per-list figures yet. They appear after the next list update.'));
 
 		var rows = [ E('tr', { 'class': 'tr table-titles' }, [
@@ -254,17 +287,29 @@ return view.extend({
 			E('th', { 'class': 'th right' }, _('Download size'))
 		]) ];
 		var self = this;
-		st.lists.forEach(function(l) {
+		lists.forEach(function(l) {
+			var result = results[liststatus.key(l.name)];
+			// the figures are those of the blockset in use; a newer attempt may have failed
+			var entries = !result ? fmtInt(l.lines)
+				: result.ok ? liststatus.badge('ok', fmtInt(l.lines), null, true)
+				: liststatus.badge('fail', fmtInt(l.lines), _('Last attempt failed: %s').format(liststatus.reason(result.reason)), true);
 			rows.push(E('tr', { 'class': 'tr' }, [
 				self.listCell(l.name),
-				E('td', { 'class': 'td right' }, fmtInt(l.lines)),
+				E('td', { 'class': 'td right' }, [ entries ]),
 				E('td', { 'class': 'td right' }, l.size.replace(/\s+/g, ' '))
+			]));
+		});
+		missing.forEach(function(s) {
+			rows.push(E('tr', { 'class': 'tr' }, [
+				self.listCell(s.name),
+				E('td', { 'class': 'td right' }, [ liststatus.badge('fail', _('Not loaded'), liststatus.reason(s.reason)) ]),
+				E('td', { 'class': 'td right' }, '-')
 			]));
 		});
 		// how much the block lists overlap. The total below counts the allow rules too, so:
 		// lists together - removed + allow rules = total. Not shown in allowlist-only mode (block lists are
 		// then dropped almost entirely) nor before it is known which lists are allowlists.
-		var together = st.lists.reduce(function(sum, l) {
+		var together = lists.reduce(function(sum, l) {
 			var allow = /\/local-allowlist/.test(l.name) || (self.allowSources && self.allowSources[listKey(l.name)]);
 			return allow ? sum : sum + (+l.lines || 0);
 		}, 0);
@@ -291,8 +336,8 @@ return view.extend({
 		]));
 		return E([], [
 			E('table', { 'class': 'table' }, rows),
-			E('p', { 'class': 'cbi-value-description' },
-				_('From the list update at %s.').format(new Date(st.lists_at * 1000).toLocaleString()))
+			st.lists_at ? E('p', { 'class': 'cbi-value-description' },
+				_('From the list update at %s.').format(new Date(st.lists_at * 1000).toLocaleString())) : ''
 		]);
 	},
 
@@ -492,6 +537,7 @@ return view.extend({
 				dom.content(document.getElementById('abl-status'), self.renderStatus(st));
 			dom.content(document.getElementById('abl-resources'), self.renderResources(st));
 			dom.content(document.getElementById('abl-lists'), self.renderLists(st));
+			dom.content(document.getElementById('abl-alerts'), self.renderAlerts(st));
 			dom.content(document.getElementById('abl-buttons'), self.renderButtons(st));
 		});
 	},
@@ -504,6 +550,7 @@ return view.extend({
 
 		var view = E([], [
 			E('h2', {}, _('Adblock-lean-plus')),
+			E('div', { 'id': 'abl-alerts' }, [ this.renderAlerts(st) ]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('Status')),
 				E('div', { 'id': 'abl-status' }, this.renderStatus(st)),

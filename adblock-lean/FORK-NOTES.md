@@ -18,6 +18,18 @@ Base: upstream `lynxthecat/adblock-lean`, branch `next-version`, commit `1c1346e
 | `ABL_UPD_CHANNEL=local-fork`: upstream update check off, `update` refuses to run (it would replace the fork) | — | `adblock-lean` |
 | Tests: `tests/test-list-conv.sh` (run with busybox: `sh tests/test-list-conv.sh`) | — | `tests/` |
 
+## List status for the web interface
+
+After the parts of an update are processed, the result of every list is written to `/etc/adblock-lean/list-status`
+(`list <ok|fail> <last attempt> <last good> <entries> <reason> <list>`; reasons: `http_<code>`, `net`, `content`, `few`,
+`size`, `timeout`, `error`), and at the end of `start` a `run <time> <0|1>` line says whether newly generated lists got installed.
+Entries of lists not processed for 30 days are dropped. On flash because the logs are in RAM and are rotated on every
+start. A write that fails never fails the update. Files: `abl-process.sh` (`save_list_status`, `save_run_status`, the
+failure reasons in `process_set_part` and `part_done_cb`), `adblock-lean` (`do_start`).
+
+Also fixed there (upstream bug): `processing_done_cb` glued the lists of failed job IDs together without a separator,
+so '1' and '2' named job 12, whose good list was then dropped.
+
 ## Installer commands in the sysupgrade keep-file
 
 `adblock-lean-plus-update`, `adblock-lean-plus-uninstall` and the installer's DoH marker are listed in

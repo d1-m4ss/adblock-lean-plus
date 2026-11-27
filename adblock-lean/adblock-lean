@@ -2732,6 +2732,7 @@ do_start()
 		fail_ids \
 		perm_fail_ids \
 		do_start_rv=1 \
+		generated \
 		initial_uptime_cs \
 		elapsed_time \
 		cur_cnt \
@@ -2759,7 +2760,10 @@ do_start()
 	# gen_blocksets() appends values to BLOCKSETS_TO_INSTALL
 
 	[ -n "${BLOCKSETS_TO_GEN}" ] &&
+	{
+		generated=1
 		gen_blocksets BLOCKSETS_TO_INSTALL "${BLOCKSETS_TO_GEN}"
+	}
 
 	[ -n "${BLOCKSETS_TO_INSTALL}" ] &&
 		install_blocksets ok_ids perm_fail_ids "${BLOCKSETS_TO_INSTALL}"
@@ -2770,6 +2774,7 @@ do_start()
 	[ -n "${retry_ids}" ] &&
 	{
 		BLOCKSETS_TO_INSTALL=
+		generated=1
 		log_msg -fb "${retry_ids}" "" "Trying again to generate and install blockset files{}."
 		gen_blocksets BLOCKSETS_TO_INSTALL "${retry_ids}"
 
@@ -2818,6 +2823,14 @@ do_start()
 			do_stop "${fail_ids}" || exit 1
 			reg_fail -fb "${fail_ids}" "Failed to install new blockset files and can not be restore previous files from backup{}."
 		}
+	}
+
+	[ -n "${generated}" ] &&
+	{
+		if [ -z "${fail_ids}${restored_ids}" ]
+		then save_run_status 1
+		else save_run_status 0
+		fi
 	}
 
 	subtract_a_from_b "${fail_ids} ${restored_ids}" "${set_ids}" installed_ids

@@ -20,7 +20,7 @@ missing pieces together:
 |---|---|
 | 📋 *AdGuard DNS filter* and *Popup Hosts* come in AdGuard syntax only; with adblock-lean 0.8.1 we had to convert them by hand into a file that never updated | reads AdGuard-syntax lists directly, exceptions included |
 | ⏱️ A window without filtering after every reboot | optional early boot filter: the saved blocklist is loaded before dnsmasq starts |
-| 🖱️ The existing LuCI app was written for adblock-lean 0.8.1 | reworked pages: subscriptions you can switch off, AdGuard's list catalog, status, router resources, backup |
+| 🖱️ The existing LuCI app was written for adblock-lean 0.8.1 | reworked pages: subscriptions you can switch off, AdGuard's list catalog, status, which list failed to download, router resources, backup |
 | 🔐 Encrypted DNS set up by hand | the installer adds three DoH proxies, switches dnsmasq to them and rolls back if DNS stops working |
 | 📦 Several projects to install and wire together | one installer that looks at your router, asks, shows the plan and then installs |
 | ⬆️ `sysupgrade` forgets the setup | scripts and settings are kept while "start at boot" is on (untested on a real upgrade, see [Requirements](#-requirements)) |
@@ -88,7 +88,8 @@ CPU was no argument against AdGuard Home in our runs (13.9 s, measured at anothe
 | **Subscriptions** | **AdGuard Home's list catalog** |
 | [![Subscriptions](docs/screenshots/subscriptions.png)](docs/screenshots/subscriptions.png) | [![Catalog](docs/screenshots/adguard-catalog.png)](docs/screenshots/adguard-catalog.png) |
 
-Rendered from this repository's view files with data captured from a router running it (LuCI default theme).
+Rendered from this repository's view files with data captured from a router running it (LuCI default theme); the
+"Last update" column is filled in for the captured update.
 
 ## ✅ Requirements
 
@@ -309,6 +310,21 @@ To change them: LuCI → Services → HTTPS DNS Proxy (`--doh-gui`), or edit `/e
 - Rules that dnsmasq can not express are skipped and counted in the log: wildcards inside a name, regexes,
   `$client`/`$denyallow` and similar, whole-TLD rules (`||xyz^`). `.example.com^` blocks `example.com` too.
 - HaGeZi lists are fastest as adblock-lean short ids (`hagezi:pro.plus`, plain domains): no conversion needed.
+
+### List status
+
+A list that can not be downloaded is skipped and the update goes on without it, so the pages say which one it was:
+
+- **Lists** page, column **Last update**: updated, failed (with the reason and when it last worked), switched off, or
+  not updated yet.
+- **Overview**: a warning on top when a list failed or when an update did not install new lists; a sign on every row of
+  the list table.
+
+Reasons: HTTP error, server not reachable, timed out, not a block list, too few usable entries (also a web page served
+as an AdGuard or hosts list), larger than the size limit, processing failed. A list that moved and is no longer served
+at the old address shows up this way; an abandoned list that can still be downloaded does not. The results are kept in
+`/etc/adblock-lean/list-status` (two or three small writes per update), so they survive a reboot. They appear after the
+first update with this version.
 
 ### Backup and import
 

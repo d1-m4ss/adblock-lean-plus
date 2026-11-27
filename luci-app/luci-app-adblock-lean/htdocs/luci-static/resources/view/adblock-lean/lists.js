@@ -7,6 +7,7 @@
 'require ui';
 'require dom';
 'require view.adblock-lean.names as listnames';
+'require view.adblock-lean.liststatus as liststatus';
 
 var callGetSubs = rpc.declare({ object: 'luci.adblock-lean', method: 'get_subscriptions', expect: { '': {} } });
 var callSetSubs = rpc.declare({ object: 'luci.adblock-lean', method: 'set_subscriptions', params: [ 'text' ], expect: { '': {} } });
@@ -17,6 +18,13 @@ var callDetect = rpc.declare({ object: 'luci.adblock-lean', method: 'detect_form
 var callCatalog = rpc.declare({ object: 'luci.adblock-lean', method: 'get_catalog', expect: { '': {} } });
 
 var PRESETS = listnames.PRESETS;
+
+// on a narrow screen the status goes under the list address instead of into its own column
+var STYLE = '.abl-status-inline{display:none;margin-top:.35em}' +
+	'@media (max-width:600px){.abl-status-col{display:none!important}.abl-status-inline{display:block}}';
+
+// results of the last download, by list address
+var lastResults = Object.create(null);
 
 // text goes into .value, never through innerHTML
 function textarea(id, text) {
@@ -86,6 +94,14 @@ function showName(tr) {
 	own.style.display = useAuto ? 'none' : '';
 }
 
+function showStatus(tr) {
+	var source = tr.querySelector('.abl-src').value.trim();
+	var enabled = tr.querySelector('.abl-en').checked, entry = lastResults[liststatus.key(source)];
+	Array.prototype.forEach.call(tr.querySelectorAll('.abl-status'), function(box) {
+		dom.content(box, liststatus.cell(enabled, entry));
+	});
+}
+
 // Guess the format from the URL; null = keep what the user picked. 'dnsmasq' = not supported.
 function guessFormat(url) {
 	if (/\/dnsmasq\/|dnsmasq/i.test(url))
@@ -116,19 +132,26 @@ return view.extend({
 		var tr = E('tr', { 'class': 'tr abl-sub' }, [
 			E('td', { 'class': 'td', 'style': 'width:3em;text-align:center' },
 				E('input', { 'type': 'checkbox', 'class': 'abl-en', 'checked': sub.enabled ? '' : null,
-					'title': _('Switched off subscriptions stay in the list but are not downloaded') })),
+					'title': _('Switched off subscriptions stay in the list but are not downloaded'),
+					'change': function(ev) { showStatus(ev.target.closest('tr')); } })),
 			E('td', { 'class': 'td' }, [
 				// a text node: the name may come from the downloaded catalog
 				E('div', { 'class': 'abl-name', 'style': 'font-weight:bold' }, ''),
 				E('input', { 'type': 'text', 'class': 'cbi-input-text abl-title', 'style': 'width:100%;margin-bottom:.25em',
 					'maxlength': 80, 'placeholder': _('Name (optional)'), 'value': sub.title || '' }),
 				E('input', { 'type': 'text', 'class': 'cbi-input-text abl-src', 'style': 'width:100%', 'maxlength': 500, 'value': sub.source,
-					'change': function(ev) { showName(ev.target.closest('tr')); } })
+					'change': function(ev) {
+						var row = ev.target.closest('tr');
+						showName(row);
+						showStatus(row);
+					} }),
+				E('div', { 'class': 'abl-status abl-status-inline' })
 			]),
 			E('td', { 'class': 'td', 'style': 'width:15em' },
 				E('select', { 'class': 'cbi-input-select abl-fmt' }, FORMATS.map(function(f) {
 					return E('option', { 'value': f[0], 'selected': f[0] === sub.format ? '' : null }, f[1]);
 				}))),
+			E('td', { 'class': 'td abl-status abl-status-col', 'style': 'width:14em' }),
 			E('td', { 'class': 'td', 'style': 'width:6em' },
 				E('button', { 'class': 'cbi-button cbi-button-remove', 'click': function(ev) {
 					var row = ev.target.closest('tr');
@@ -136,6 +159,7 @@ return view.extend({
 				} }, _('Delete')))
 		]);
 		showName(tr);
+		showStatus(tr);
 		return tr;
 	},
 
@@ -156,6 +180,7 @@ return view.extend({
 		if (subs.error)
 			return E('div', { 'class': 'alert-message warning' }, document.createTextNode(subs.error));
 
+		lastResults = liststatus.map(subs.list_status);
 		var idx = 0;
 		var presetSel = E('select', { 'class': 'cbi-input-select', 'id': 'abl-preset' }, [ E('option', { 'value': '' }, _('Add a ready-made list…')) ].concat(
 			PRESETS.map(function(g) {
@@ -172,6 +197,7 @@ return view.extend({
 			window.setTimeout(function() { self.loadNames(); }, 0);
 
 		return E([], [
+			E('style', {}, [ STYLE ]),
 			E('h2', {}, _('Adblock-lean-plus: subscriptions')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('p', { 'class': 'cbi-value-description' },
@@ -181,6 +207,7 @@ return view.extend({
 						E('th', { 'class': 'th' }, _('On')),
 						E('th', { 'class': 'th' }, _('List')),
 						E('th', { 'class': 'th' }, _('Format')),
+						E('th', { 'class': 'th abl-status-col' }, _('Last update')),
 						E('th', { 'class': 'th' }, '')
 					])),
 					E('tbody', { 'id': 'abl-subs' }, (subs.subscriptions || []).map(function(s) { return self.subRow(s); }))

@@ -41,6 +41,13 @@ Works with the adblock-lean fork in `../adblock-lean` (upstream `next-version` l
 - **Presets** grouped: AdGuard, HaGeZi (short ids = plain-domain lists, no conversion), Security, All-purpose; DNS-suitable picks from yokoffing/filterlists (HaGeZi High-Entropy NRDs 7d, Dandelion Sprout's Anti-Malware in AdGuard Home format, cbuijs HaGeZi combo mini). Browser-only lists (cosmetic, URL parameters, paths) are not offered: measured on the router, e.g. Privacy Essentials 669 lines → 70 usable domains, Actually Legitimate URL Shortener 5841 → 0.
 - **Format guess** when a URL is added: `adblock`/AdGuard → AdGuard syntax, `wildcard`/`domains` → plain domains, `hosts` → hosts; dnsmasq-format URLs are refused with an explanation (adblock-lean builds the dnsmasq format itself).
 
+## List status
+
+`liststatus.js` (shared) shows what the engine recorded in `/etc/adblock-lean/list-status`: `status` and
+`get_subscriptions` return `list_status` for the lists of the config, `status` also `run_at`/`run_ok`. Lists page:
+column "Last update" (under the address on screens narrower than 600 px). Overview: warnings on top, a sign per row of
+the list table, an extra row for a list that was not loaded.
+
 ## Install by hand (stand / router)
 
 Use `../install.sh --gui root@<router>`, or by hand:

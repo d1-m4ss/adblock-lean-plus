@@ -11,6 +11,9 @@ PROCESSED_PARTS_DIR="${ABL_TMP_DIR}/blockset_parts"
 
 ERR_F="${ABL_TMP_DIR}/process-errors"
 
+# result of the last download of every list, read by the web interface; on flash because the logs are in RAM
+LIST_STATUS_F="${ABL_CFG_DIR}/list-status"
+
 ABL_TEST_DOM_BASE="adblocklean-test.totallybogus"
 
 ALL_PART_FORMATS="raw hosts adguard"
@@ -238,6 +241,9 @@ process_set_part()
 {
 	dl_feed() { ${UCL_CMD:?} "${1}" -O- --timeout=3 2> "${ucl_err_file}"; }
 
+	# 1: why the part failed (http_<code>|net|content|few|size|error), for save_list_status()
+	set_fail_reason() { printf '%s\n' "${1}" > "${PROCESSED_PARTS_DIR}/${index}_fail"; }
+
 	conv_hosts_to_raw()
 	{
 		${SED_CMD} -nE '
@@ -384,6 +390,7 @@ process_set_part()
 		pipeline_rv \
 		pipeline_msg \
 		ucl_err \
+		fail_reason \
 		\
 		mirrors \
 		mirror \
@@ -402,6 +409,7 @@ process_set_part()
 		adg_allow_file="${PROCESSED_PARTS_DIR}/${index}_adg_allow" \
 		adg_imp_file="${PROCESSED_PARTS_DIR}/${index}_adg_important" \
 		adg_skip_file="${ABL_TMP_DIR}/adg_skip_${index}" \
+		oversize_file="${ABL_TMP_DIR}/oversize_${index}" \
 		adg_skipped \
 		part_compr_or_cat="${INTERM_COMPR_OR_CAT_STDOUT:?}"
 
@@ -475,7 +483,7 @@ process_set_part()
 		msg_mirr=
 		[ -n "${cur_mirror}" ] && msg_mirr=" [   mirror: ${cur_mirror}${mirror_pad} ]"
 
-		rm -f "${rogue_el_file}" "${part_stats_file}" "${ucl_err_file}" "${adg_allow_file}" "${adg_imp_file}" "${adg_skip_file}"
+		rm -f "${rogue_el_file}" "${part_stats_file}" "${ucl_err_file}" "${adg_allow_file}" "${adg_imp_file}" "${adg_skip_file}" "${oversize_file}"
 
 		msg="Processing ${format} blockset part"
 		get_pad pad "${msg}" 30
@@ -490,7 +498,7 @@ process_set_part()
 		{
 			head -c "${max_part_size:?}k"
 			if read -rn1 -d ''
-			then cat 1>/dev/null; false
+			then cat 1>/dev/null; : > "${oversize_file}"; false
 			else :
 			fi
 		} |
@@ -520,7 +528,10 @@ process_set_part()
 
 		# size-exceeded check
 		[ $(( part_size_B <= max_part_size*1024 )) = 1 ] ||
+		{
+			set_fail_reason size
 			return 4
+		}
 
 		if [ "${pipeline_rv}" = 0 ]
 		then
@@ -539,11 +550,12 @@ process_set_part()
 				case "${rogue_element}" in *"${CR}"*)
 					log_msg -warn "blockset part '${print_id}' contains Non-Unix (CR) newlines." \
 						"This file needs to be converted to Unix newline style (LF)."
+						set_fail_reason content
 						return 3 ;;
 				esac
 
 				log_msg -warn "${rogue_el_print} identified in blockset part '${print_id}'."
-				[ -n "${rogue_element}" ] || return 3
+				[ -n "${rogue_element}" ] || { set_fail_reason content; return 3; }
 			fi
 
 			# min_part_entries check
@@ -566,6 +578,19 @@ process_set_part()
 			! grep -q "Download completed" "${ucl_err_file}"
 		}
 		then
+			if [ -f "${oversize_file}" ]
+			then fail_reason=size
+			elif ! grep -q "Download completed" "${ucl_err_file}"
+			then
+				fail_reason="$(${SED_CMD} -n 's/.*HTTP error \([0-9][0-9]*\).*/http_\1/p' "${ucl_err_file}" | tail -n1)"
+				fail_reason="${fail_reason:-net}"
+			elif [ "${pipeline_rv}" != 0 ]
+			then fail_reason=error
+			elif [ -n "${rogue_element}" ]
+			then fail_reason=content
+			else fail_reason=few
+			fi
+			set_fail_reason "${fail_reason}"
 			[ -s "${ucl_err_file}" ] && ucl_err=" uclient-fetch output: ${_NL_}'$(cat "${ucl_err_file}")'."
 			rm -f "${ucl_err_file}"
 			reg_fail "" "Failed download attempt for list '${print_id}'.${pipeline_msg:+ }${pipeline_msg}${ucl_err}"
@@ -573,6 +598,10 @@ process_set_part()
 		elif [ "${pipeline_rv}" != 0 ]
 		then
 			reg_fail "" "${pipeline_msg}"
+			if [ -f "${oversize_file}" ]
+			then set_fail_reason size
+			else set_fail_reason error
+			fi
 			return 1
 		else
 			bytes2human part_size_human "${part_size_B}" -p
@@ -625,6 +654,66 @@ part_size_exceeded()
 	log_msg "Consider either increasing this value in the blockset config or removing the corresponding blockset part identifier or URL from same config."
 }
 
+# ${LIST_STATUS_F}:
+#   run <epoch> <1: the new blockset was installed | 0: it was not>
+#   list <ok|fail> <last attempt epoch> <last good epoch, 0: never> <entries> <reason|-> <list id>
+# Both writers replace the file in one move and never fail the update.
+# A list is recorded as failed only if an attempt of its job failed: one never started, or stopped before
+# that, because of another list (blockset_part_failed_action=STOP) keeps its earlier record.
+# 1: part indexes
+save_list_status()
+{
+	local index print_id cnt reason state now \
+		old="${LIST_STATUS_F:?}" new="${ABL_TMP_DIR:?}/list-status"
+
+	now="$(date +%s)"
+	for index in ${1}
+	do
+		print_id='' cnt='' reason=- state=ok
+		job_get_params "${index}" print_id && [ -n "${print_id}" ] || continue
+		[ -f "${PROCESSED_PARTS_DIR}/${index}_stats" ] && read -r cnt _ < "${PROCESSED_PARTS_DIR}/${index}_stats"
+		case "${cnt}" in
+			''|*[!0-9]*)
+				[ -f "${PROCESSED_PARTS_DIR}/${index}_fail" ] || continue
+				cnt=0 state=fail
+				read -r reason < "${PROCESSED_PARTS_DIR}/${index}_fail"
+		esac
+		printf '%s %s %s %s\n' "${state}" "${cnt}" "${reason:-error}" "${print_id}"
+	done > "${new}"
+
+	# lists not processed this time are kept for 30 days
+	[ -f "${old}" ] || old=/dev/null
+	${AWK_CMD:?} -v now="${now}" '
+		FILENAME == ARGV[1] {
+			if ($1 == "run") print
+			else if ($1 == "list") { line[$7] = $0; at[$7] = $3; good[$7] = $4; ids[++n] = $7 }
+			next
+		}
+		$1 == "ok" || $1 == "fail" {
+			print "list", $1, now, ($1 == "ok" ? now : (($4 in good) ? good[$4] : 0)), $2, $3, $4
+			seen[$4] = 1
+		}
+		END {
+			for (i = 1; i <= n; i++)
+				if (!(ids[i] in seen) && at[ids[i]] > now - 2592000) { print line[ids[i]]; seen[ids[i]] = 1 }
+		}' "${old}" "${new}" > "${LIST_STATUS_F}.tmp" &&
+		mv -f "${LIST_STATUS_F}.tmp" "${LIST_STATUS_F}" ||
+		rm -f "${LIST_STATUS_F}.tmp"
+	rm -f "${new}"
+	:
+}
+
+# 1: 1 if the newly generated blockset(s) got installed, else 0
+save_run_status()
+{
+	local old="${LIST_STATUS_F:?}"
+	[ -f "${old}" ] || old=/dev/null
+	{ printf 'run %s %s\n' "$(date +%s)" "${1}" && ${AWK_CMD:?} '$1 == "list"' "${old}"; } > "${LIST_STATUS_F}.tmp" &&
+		mv -f "${LIST_STATUS_F}.tmp" "${LIST_STATUS_F}" ||
+		rm -f "${LIST_STATUS_F}.tmp"
+	:
+}
+
 # shellcheck disable=SC2329
 gen_set_parts()
 {
@@ -643,9 +732,10 @@ gen_set_parts()
 
 		[ "${?}" = 0 ] || return ${?}
 
-		failed="${fail_jobs}${unfinished_jobs}${undispatched_jobs}${expired_jobs}${aborted_jobs}"
+		# the IDs must stay apart: '1' and '2' glued together would name job 12
+		failed="${fail_jobs} ${unfinished_jobs} ${undispatched_jobs} ${expired_jobs} ${aborted_jobs}"
 
-		[ -z "${failed}" ] && return 0
+		case "${failed}" in *[!\ ]*) ;; *) return 0 ;; esac
 
 		for index in ${failed}
 		do
@@ -667,7 +757,17 @@ gen_set_parts()
 		assert_set F_part_done_cb print_id dest_file part_stats_file max_part_size || exit 1
 
 		[ "${rv}" = 0 ] ||
+		{
 			rm -f "${dest_file}" "${part_stats_file}"
+			# the job did not say why it failed (timed out, or died)
+			[ -f "${PROCESSED_PARTS_DIR}/${index}_fail" ] ||
+			{
+				if [ "${rv}" = 124 ]
+				then printf 'timeout\n'
+				else printf 'error\n'
+				fi > "${PROCESSED_PARTS_DIR}/${index}_fail"
+			}
+		}
 
 		case "${rv}" in
 			0) return 0 ;;
@@ -751,6 +851,7 @@ gen_set_parts()
 	wait "${SCHEDULER_PID}"
 	local sched_rv=${?}
 	SCHEDULER_PID=
+	save_list_status "${indexes}"
 	return ${sched_rv}
 }
 

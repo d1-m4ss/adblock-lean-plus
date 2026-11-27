@@ -8,6 +8,7 @@
 #   /var/run/adblock-lean/blockset-metadata    PATH/CNT of the installed blockset (kept while paused)
 #   <dnsmasq conf-dir>/abl-conf-script.<id> or abl-blockset-<id>[.ext]   the active blockset
 #   /var/log/abl_session.log[.0]               session logs (per-part counts)
+#   /etc/adblock-lean/list-status              result of every list's last download (written by adblock-lean)
 #   /etc/adblock-lean/luci-subscriptions       subscriptions incl. switched-off ones (this app's file)
 # Read-only methods never start an adblock-lean session. Actions run the init script in the
 # background; the page polls. Nothing here runs while no LuCI page is open.
@@ -25,6 +26,7 @@ META_FILE="$ABL_RUN_DIR/blockset-metadata"
 ABL_PID_DIR=/tmp/abl-pid
 ABL_SESSION_LOG=/var/log/abl_session.log
 SUBS_FILE="$ABL_CFG_DIR/luci-subscriptions"
+LIST_STATUS="$ABL_CFG_DIR/list-status"
 CACHE_DIR=/var/run/luci-adblock-lean
 ESC=$(printf '\033')
 ALL_FORMATS="adguard raw hosts raw_allow"
@@ -294,6 +296,38 @@ json_resources() {
 	json_close_object
 }
 
+# The lists of the config that have a record in $LIST_STATUS (see save_list_status in abl-process.sh):
+#   list <ok|fail> <last attempt> <last good> <entries> <reason> <id>
+json_list_status() {
+	local cfg key vals=' ' tag state at good lines why name ok
+	cfg=$(set_cfg) && for key in $LIST_KEYS local_allowlist_path local_blocklist_path; do
+		vals="$vals$(cfg_get "$cfg" "$key" | tr '\t\n' '  ') "
+	done
+	json_add_array list_status
+	[ -f "$LIST_STATUS" ] && while read -r tag state at good lines why name; do
+		[ "$tag" = list ] && [ -n "$name" ] || continue
+		case "$vals" in *" $name "*) ;; *) continue ;; esac
+		json_add_object
+		json_add_string name "$name"
+		ok=0; [ "$state" = ok ] && ok=1
+		json_add_boolean ok "$ok"
+		json_add_int at "$at"
+		json_add_int ok_at "$good"
+		json_add_string reason "$why"
+		json_close_object
+	done < "$LIST_STATUS"
+	json_close_array
+}
+
+# whether the newest update got its blockset installed; nothing before the first update
+json_run_status() {
+	local tag='' at='' good=''
+	[ -f "$LIST_STATUS" ] && read -r tag at good < "$LIST_STATUS"
+	[ "$tag" = run ] || return 0
+	json_add_int run_at "$at"
+	json_add_boolean run_ok "$good"
+}
+
 m_status() {
 	local state f ts=0 name size lines id cfg
 	state=$(run_state)
@@ -331,6 +365,8 @@ m_status() {
 		done < "$CACHE_DIR/lists"
 	fi
 	json_close_array
+	json_run_status
+	json_list_status
 	json_resources "$f"
 	json_dump
 }
@@ -434,6 +470,7 @@ m_get_subscriptions() {
 		json_close_object
 	done < "$SUBS_FILE"
 	json_close_array
+	json_list_status
 	json_dump
 }
 
