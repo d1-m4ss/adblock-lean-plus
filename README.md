@@ -9,6 +9,8 @@ and `https-dns-proxy` encrypts the upstream DNS. A light replacement for AdGuard
 [🚀 Install](#install) · [🔄 Update](#update) · [🗑️ Uninstall](#uninstall) ·
 [🔁 From AdGuard Home](#-if-you-already-run-adguard-home) · [🔧 Details](#-how-it-works) · [🙏 Thanks](#-thanks)
 
+![How an update works: the lists are downloaded, converted, sorted with duplicates dropped, tested and loaded into dnsmasq; RAM goes up during the update and back to the size of the new set](docs/how-it-works.gif)
+
 ## 💡 Why this fork
 
 AdGuard Home does the job on a router, but it is heavy: on our 1 GB test router version 1.0.0 took 162–244 MB of
@@ -339,6 +341,17 @@ at the old address shows up this way; an abandoned list that can still be downlo
 boot" is on, a firmware upgrade. They appear after the
 first update with this version.
 
+### Which lists add little
+
+The list table on the **Overview** page has a column **Only in this list**: how many of a block list's domains none
+of your other lists has. A list where that is under 1% gets an orange sign: almost all of it is already blocked by
+the others, so switching it off loses little and saves its download and processing time on every update (the router's
+memory stays about the same, as dnsmasq holds each domain once anyway). Example from the test router: HaGeZi Pop-up ads had
+71,191 domains, 70 of them in no other list, because HaGeZi PRO++ includes it. Counted during the update's
+deduplication (that step took about 8 s longer for 2 million entries on a GL-MT6000, where the old lists keep
+filtering meanwhile), so the figures change only after the next update and are not shown when `deduplication` is off.
+Domains of your allowlist are counted too, as they are removed only after this step.
+
 ### Backup and import
 
 LuCI → Services → Adblock-lean-plus, section **Backup**: "Download backup" saves one JSON file with the subscriptions
@@ -384,8 +397,10 @@ preset blocks the names of public DoH servers, so most browsers fall back to the
   [`luci-app/`](luci-app/) ([FORK-NOTES](luci-app/FORK-NOTES.md)), [`config/https-dns-proxy`](config/https-dns-proxy).
 - Upstream changes (in a git checkout): `tools/sync-upstream.sh` pulls adblock-lean (`next-version`) and the LuCI app
   (`main`) into their subtrees; resolve conflicts, run the tests, test on a router.
-- Tests: `sh adblock-lean/tests/test-list-conv.sh` (on the router or with BusyBox): list sanitizing and AdGuard-syntax
-  conversion, 21 checks.
+- Tests: `sh tools/ci.sh` (on the router or with BusyBox) runs the syntax checks and every `adblock-lean/tests/test-*.sh`;
+  GitHub Actions runs it in OpenWrt 25.12 and 24.10 containers.
+- `docs/how-it-works.gif` is made from `docs/how-it-works.svg` (CSS animation, 16 s): one screenshot every 0.1 s in a
+  browser, joined with ImageMagick (`magick -delay 10 -loop 0 f-*.png -layers Optimize how-it-works.gif`).
 - adblock-lean's own `update` command is disabled in this fork: it would replace the fork with the upstream version.
 - The `luci-app/` subtree's upstream package feed and `.apk` are not used: that build is for adblock-lean 0.8.x.
 

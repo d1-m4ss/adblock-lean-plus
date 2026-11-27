@@ -10,6 +10,9 @@ Works with the adblock-lean fork in `../adblock-lean` (upstream `next-version` l
   dnsmasq (duplicates and allowed domains) and the allow rules loaded with the rest (`status.allow_entries`, counted
   once per blockset). Not shown in allowlist-only mode. Per-list figures come only from updates that installed their
   blockset.
+- **Only in this list**: per block list, the entries no other list of its blockset has (engine log line
+  `Entries no other list has:`, parsed by `refresh_list_stats` into a fourth field of the cache). Under 1% of the
+  list gets a `warn` badge. With several blocksets sharing a list, the figure of the last one generated is shown.
 - **List names** (`view/adblock-lean/names.js`, both pages): every list shows a name and its address; presets are named
   locally, other subscriptions from the AdGuard catalog. For any other URL the user
   can give a name (prefilled from the list's `Title:` header); it is stored after the source in `luci-subscriptions`.

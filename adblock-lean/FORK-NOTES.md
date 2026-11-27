@@ -11,12 +11,13 @@ Base: upstream `lynxthecat/adblock-lean`, branch `next-version`, commit `1c1346e
 | AdGuard `.example.com^` rules become `example.com` (no `*.` wildcard entries): on a GL.iNet GL-MT6000 with dnsmasq 2.93, 7 wildcard `local=/*.x/` lines in a 567k-domain blockset raised the average uncached lookup from ~78 ms to ~210 ms; removing them restored ~78 ms | — | `abl-process.sh` |
 | Faster AdGuard conversion: fast path for `||domain^`, second pass only when the list has `badfilter`/`important` rules (PRO++: 29 s → 16 s with busybox awk) | — | `abl-process.sh` |
 | All formats: strip UTF-8 BOM, drop lines starting with `!` or `[` (`[Adblock Plus]` headers) and cosmetic rules (`example.com##.ad`) | #210, #195 | `abl-process.sh` |
+| With `deduplication=1`, the block lists are deduplicated together with their part index (`print_set_parts ... tag`, `dedup_count_uniq`), so each list's count of entries no other list has is logged (`Entries no other list has:`) for the web interface; same output, +8 s for 2M entries on a GL-MT6000 | — | `abl-process.sh`, `tests/test-uniq-count.sh` |
 | Hagezi `-onlydomains` URL check no longer rejects NRD/DGA lists | #225 | `abl-process.sh` |
 | Local block/allow lists are processed once (as raw), not once per list format | — | `abl-process.sh` |
 | Early boot script `/etc/init.d/adblock-lean-early` (START=18, before dnsmasq): restores the conf-script of a persistent blockset whose md5 matches, so dnsmasq filters from its own start. `boot-cs.<id>` is saved only after the blockset passed the active checks, dropped on install failure, on `rm_blockset_config` and uninstall; blocksets without a config or with changed conf-dirs are not restored; the state check accepts the 'loaded by the early script, no RAM metadata yet' state (`11010`); the script is rewritten on start when its template changes | #226 | `adblock-lean`, `abl-manage.sh` |
 | `/lib/upgrade/keep.d/adblock-lean` while enabled: sysupgrade with kept settings preserves scripts, config, enabled state and the early boot script; also the LuCI pages, the list status, the `boot-cs.<id>` files and a persistent blockset dir that is on the root filesystem (one on another mount survives by itself), so the early boot script filters from the first boot | #124, #211 | `adblock-lean` |
 | `ABL_UPD_CHANNEL=local-fork`: upstream update check off, `update` refuses to run (it would replace the fork) | — | `adblock-lean` |
-| Tests: `tests/test-list-conv.sh`, `tests/test-list-retry.sh` (run with busybox; `tools/ci.sh` of the repository runs them all) | — | `tests/` |
+| Tests: `tests/test-list-conv.sh`, `tests/test-list-retry.sh`, `tests/test-uniq-count.sh` (run with busybox; `tools/ci.sh` of the repository runs them all) | — | `tests/` |
 
 ## List status for the web interface
 

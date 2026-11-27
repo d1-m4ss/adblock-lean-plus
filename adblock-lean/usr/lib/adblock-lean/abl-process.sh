@@ -1202,6 +1202,21 @@ gen_blockset()
 				"${merged_allow_f:?}" "${adg_keep_f:?}" -
 	}
 
+	# deduplication that also counts, for each block list, the entries no other list of the set has.
+	# input: '<domain> <part index>' lines (print_set_parts ... tag). Prints every domain once and writes
+	# '<part index> <count>' lines to ${proc_dir}/uniq_stats (no line for a list with none).
+	# C locale: ' ' must sort before every domain character, so all lines of a domain are adjacent.
+	# Domains are compared as strings ('$1 ""'): entries like '1.1' and '1.10' are equal as numbers
+	dedup_count_uniq()
+	{
+		LC_ALL=C ${SORT_CMD:?} -u |
+		${AWK_CMD:?} -v F="${proc_dir:?}/uniq_stats" '
+			{ k = $1 "" }
+			k != d { if (n == 1) u[i]++; if (NR > 1) print d; d = k; n = 0 }
+			{ n++; i = $2 }
+			END { if (NR) { if (n == 1) u[i]++; print d }; for (j in u) print j, u[j] > F }'
+	}
+
 	whitelist_filter()
 	{
 		# only print subdomains of allowlist domains
@@ -1264,7 +1279,7 @@ gen_blockset()
 		done
 	}
 
-	# 1 - part indexes
+	# 1 - part indexes, 2 - (optional) 'tag': append ' <part index>' to every entry, for dedup_count_uniq()
 	print_set_parts()
 	{
 		local index index_refs part_file rv \
@@ -1273,7 +1288,12 @@ gen_blockset()
 		for index in ${indexes}
 		do
 			get_part_process_path part_file "${index}"
-			${PART_EXTR_OR_CAT_STDOUT:?} "${part_file}"
+			if [ "${2}" = tag ]
+			then
+				${PART_EXTR_OR_CAT_STDOUT:?} "${part_file}" | ${SED_CMD:?} "/^\$/d;s/\$/ ${index}/"
+			else
+				${PART_EXTR_OR_CAT_STDOUT:?} "${part_file}"
+			fi
 			rv=${?}
 			eval "index_refs=\"\${INDEX_REFS_${index}}\""
 			[ -z "${index_refs}" ] && rm -f "${part_file}"
@@ -1287,6 +1307,8 @@ gen_blockset()
 		max_set_size \
 		errors \
 		dedup_cmd_or_cat="${CAT_CMD:?}" \
+		block_dedup_or_cat="${CAT_CMD:?}" \
+		block_parts_tag='' \
 		allow_filter_or_cat="${CAT_CMD:?}" \
 		pack_cmd="pack_entries_sed" \
 		final_compr_or_cat_stdout \
@@ -1325,7 +1347,12 @@ gen_blockset()
 	esac
 
 	local max_size_b=$((max_set_size*1024))
-	[ "${deduplication}" = 1 ] && dedup_cmd_or_cat="${SORT_CMD} -u -"
+	[ "${deduplication}" = 1 ] &&
+	{
+		dedup_cmd_or_cat="${SORT_CMD} -u -"
+		block_dedup_or_cat=dedup_count_uniq
+		block_parts_tag=tag
+	}
 
 	case "${AWK_CMD:?}" in
 		*gawk) pack_cmd="pack_entries_awk"
@@ -1476,9 +1503,9 @@ gen_blockset()
 	{
 		{
 			# print blockset parts
-			print_set_parts "${block_indexes}" |
-			# optional deduplication
-			${dedup_cmd_or_cat} |
+			print_set_parts "${block_indexes}" ${block_parts_tag} |
+			# optional deduplication (with the count of entries only one list has)
+			${block_dedup_or_cat} |
 
 			# Optionally remove allow domains or enforce whitelist-only mode
 			${allow_filter_or_cat} |
@@ -1547,6 +1574,21 @@ gen_blockset()
 		reg_fail -fb "${set_id}" "Final uncompressed blockset file size{} exceeded ${max_set_size} kiB set in max_blockset_size_KB config option!"
 		log_msg "Consider either increasing this value in the config or changing the blockset URLs."
 		return 1
+	fi
+
+	# for the web interface: how many entries of each block list no other list of the set has
+	if [ -n "${block_parts_tag}" ]
+	then
+		local uniq_cnt uniq_cnt_human
+		for index in ${block_indexes}
+		do
+			job_get_params "${index}" print_id && [ -n "${print_id}" ] || continue
+			uniq_cnt="$(${AWK_CMD} -v i="${index}" '$1 == i { print $2 }' "${proc_dir}/uniq_stats" 2>/dev/null)"
+			is_uint "${uniq_cnt}" || uniq_cnt=0
+			int2human uniq_cnt_human "${uniq_cnt}"
+			log_msg "Entries no other list has:    ${green}${print_id}${n_c}   [ ${orange}${uniq_cnt_human}${n_c} ]"
+		done
+		rm -f "${proc_dir}/uniq_stats"
 	fi
 
 	# check total entries count vs min_entries

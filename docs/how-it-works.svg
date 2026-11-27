@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" role="img" aria-label="How adblock-lean-plus updates the block lists: download, convert, sort and remove duplicates, test, load into dnsmasq">
+<style>
+  svg { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .bg { fill: #0f172a; }
+  .t { fill: #e2e8f0; }
+  .m { fill: #94a3b8; }
+  .h { font-size: 22px; font-weight: 700; }
+  .n { font-size: 14px; font-weight: 600; }
+  .s { font-size: 12px; }
+  .xs { font-size: 11px; }
+  .big { font-size: 30px; font-weight: 700; }
+  .track { fill: #1e293b; }
+  .bar { fill: #38bdf8; transform-box: fill-box; transform-origin: left center; animation: grow 16s ease-out infinite; }
+  .ubar { fill: #22c55e; animation: from37 16s infinite; }
+  .ok { fill: #22c55e; }
+  .warn { fill: #f59e0b; }
+  .pill { fill: #1e293b; stroke: #334155; }
+  .box { fill: #111827; stroke: #334155; stroke-width: 1.5; }
+  .dot { fill: #38bdf8; }
+  .p1 { animation: pill1 16s infinite; } .p2 { animation: pill2 16s infinite; } .p3 { animation: pill3 16s infinite; }
+  .p4 { animation: pill4 16s infinite; } .p5 { animation: pill5 16s infinite; }
+  .f1 { animation: from5 16s infinite; }
+  .s2 { opacity: 0; animation: show2 16s infinite; }
+  .s3 { animation: from37 16s infinite; }
+  .s3t { animation: show3 16s infinite; }
+  .s4 { animation: from59 16s infinite; }
+  .s5 { animation: from70 16s infinite; }
+  .flow1 { opacity: 0; animation: flow1 16s infinite; } .flow2 { opacity: 0; animation: flow2 16s infinite; }
+  .mem { fill: none; stroke: #f59e0b; stroke-width: 2.5; stroke-dasharray: 1000; animation: draw 16s linear infinite; }
+  @keyframes grow { 0% { transform: scaleX(0); } 15%, 100% { transform: scaleX(1); } }
+  @keyframes from5 { 0%, 4% { opacity: 0; } 8%, 100% { opacity: 1; } }
+  @keyframes from37 { 0%, 36% { opacity: 0; } 40%, 100% { opacity: 1; } }
+  @keyframes from59 { 0%, 56% { opacity: 0; } 59%, 100% { opacity: 1; } }
+  @keyframes from70 { 0%, 69% { opacity: 0; } 72%, 100% { opacity: 1; } }
+  @keyframes show2 { 0%, 18% { opacity: 0; } 21%, 30% { opacity: 1; } 33%, 100% { opacity: 0; } }
+  @keyframes show3 { 0%, 32% { opacity: 0; } 35%, 55% { opacity: 1; } 58%, 100% { opacity: 0; } }
+  @keyframes pill1 { 0%, 18% { fill: #0ea5e9; } 19%, 100% { fill: #1e293b; } }
+  @keyframes pill2 { 0%, 18% { fill: #1e293b; } 19%, 31% { fill: #0ea5e9; } 32%, 100% { fill: #1e293b; } }
+  @keyframes pill3 { 0%, 31% { fill: #1e293b; } 32%, 56% { fill: #0ea5e9; } 57%, 100% { fill: #1e293b; } }
+  @keyframes pill4 { 0%, 56% { fill: #1e293b; } 57%, 68% { fill: #0ea5e9; } 69%, 100% { fill: #1e293b; } }
+  @keyframes pill5 { 0%, 68% { fill: #1e293b; } 69%, 100% { fill: #0ea5e9; } }
+  @keyframes flow1 { 0%, 32% { opacity: 0; transform: translate(0, 0); } 34% { opacity: 1; } 50% { opacity: 1; transform: translate(var(--dx), var(--dy)); } 52%, 100% { opacity: 0; transform: translate(var(--dx), var(--dy)); } }
+  @keyframes flow2 { 0%, 68% { opacity: 0; transform: translate(0, 0); } 70% { opacity: 1; } 80% { opacity: 1; transform: translate(84px, -30px); } 82%, 100% { opacity: 0; transform: translate(84px, -30px); } }
+  @keyframes draw { 0% { stroke-dashoffset: 1000; } 100% { stroke-dashoffset: 0; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<rect class="bg" width="960" height="560" rx="16"/>
+<text class="t h" x="40" y="44">How adblock-lean-plus updates your block lists</text>
+<text class="m s" x="40" y="66">Real figures from the test router (GL-MT6000, 12 lists). The update runs once a day; the old lists keep filtering until the new set is loaded.</text>
+
+<!-- steps -->
+<g class="s" text-anchor="middle">
+  <rect class="pill p1" x="40" y="84" width="164" height="30" rx="15"/><text class="t" x="122" y="104">1  Download</text>
+  <rect class="pill p2" x="214" y="84" width="164" height="30" rx="15"/><text class="t" x="296" y="104">2  Convert</text>
+  <rect class="pill p3" x="388" y="84" width="164" height="30" rx="15"/><text class="t" x="470" y="104">3  Sort, drop duplicates</text>
+  <rect class="pill p4" x="562" y="84" width="164" height="30" rx="15"/><text class="t" x="644" y="104">4  Test</text>
+  <rect class="pill p5" x="736" y="84" width="184" height="30" rx="15"/><text class="t" x="828" y="104">5  Load into dnsmasq</text>
+</g>
+
+<!-- lists: entries (blue) and entries no other list has (green) -->
+<g>
+  <text class="t n" x="40" y="152">HaGeZi Threat Intelligence</text>
+  <text class="m s f1" x="40" y="170">1,307,249 domains</text>
+  <rect class="track" x="236" y="140" width="300" height="14" rx="3"/>
+  <rect class="bar" x="236" y="140" width="300" height="14" rx="3"/>
+  <rect class="ubar" x="236" y="140" width="266" height="14" rx="3"/>
+  <text class="ok s s3" x="236" y="170">only in this list: 1,160,382</text>
+
+  <text class="t n" x="40" y="204">HaGeZi PRO++</text>
+  <text class="m s f1" x="40" y="222">255,860 domains</text>
+  <rect class="track" x="236" y="192" width="300" height="14" rx="3"/>
+  <rect class="bar" x="236" y="192" width="59" height="14" rx="3"/>
+  <rect class="ubar" x="236" y="192" width="24" height="14" rx="3"/>
+  <text class="ok s s3" x="236" y="222">only in this list: 102,537</text>
+
+  <text class="t n" x="40" y="256">OISD big</text>
+  <text class="m s f1" x="40" y="274">222,296 domains</text>
+  <rect class="track" x="236" y="244" width="300" height="14" rx="3"/>
+  <rect class="bar" x="236" y="244" width="51" height="14" rx="3"/>
+  <rect class="ubar" x="236" y="244" width="10" height="14" rx="3"/>
+  <text class="ok s s3" x="236" y="274">only in this list: 44,882</text>
+
+  <text class="t n" x="40" y="308">AdGuard DNS filter</text>
+  <text class="m s f1" x="40" y="326">194,723 rules</text>
+  <rect class="track" x="236" y="296" width="300" height="14" rx="3"/>
+  <rect class="bar" x="236" y="296" width="45" height="14" rx="3"/>
+  <rect class="ubar" x="236" y="296" width="25" height="14" rx="3"/>
+  <text class="ok s s3" x="236" y="326">only in this list: 109,869</text>
+  <text class="warn xs s2" x="296" y="307">||ads.example.com^  →  ads.example.com</text>
+
+  <text class="t n" x="40" y="360">HaGeZi Pop-up ads</text>
+  <text class="m s f1" x="40" y="378">71,191 domains</text>
+  <rect class="track" x="236" y="348" width="300" height="14" rx="3"/>
+  <rect class="bar" x="236" y="348" width="16" height="14" rx="3"/>
+  <g class="s3"><circle class="warn" cx="244" cy="373" r="7"/><text x="244" y="377" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">!</text>
+  <text class="warn s" x="258" y="378">only in this list: 70 (0.1%): the other lists have the rest</text></g>
+
+  <text class="t n" x="40" y="412">7 small lists</text>
+  <text class="m s f1" x="40" y="430">5,672 domains</text>
+  <rect class="track" x="236" y="400" width="300" height="14" rx="3"/>
+  <rect class="bar" x="236" y="400" width="3" height="14" rx="1"/>
+  <text class="ok s s3" x="236" y="430">only in these lists: 3,333</text>
+</g>
+
+<!-- domains flowing into the sort step -->
+<g>
+  <circle class="dot flow1" style="--dx:70px;--dy:110px" cx="540" cy="147" r="4"/>
+  <circle class="dot flow1" style="--dx:70px;--dy:60px;animation-delay:.3s" cx="540" cy="199" r="4"/>
+  <circle class="dot flow1" style="--dx:70px;--dy:10px;animation-delay:.6s" cx="540" cy="251" r="4"/>
+  <circle class="dot flow1" style="--dx:70px;--dy:-40px;animation-delay:.9s" cx="540" cy="303" r="4"/>
+  <circle class="dot flow1" style="--dx:70px;--dy:-90px;animation-delay:1.2s" cx="540" cy="355" r="4"/>
+  <circle class="dot flow1" style="--dx:70px;--dy:-140px;animation-delay:1.5s" cx="540" cy="407" r="4"/>
+</g>
+
+<!-- sort and test -->
+<rect class="box" x="596" y="196" width="168" height="124" rx="10"/>
+<text class="t n" x="680" y="222" text-anchor="middle">all lists</text>
+<text class="t s" x="680" y="240" text-anchor="middle">2,056,991</text>
+<g class="s3"><text class="warn s" x="680" y="266" text-anchor="middle">−395,975</text>
+<text class="m xs" x="680" y="282" text-anchor="middle">already in another list</text></g>
+<g class="s4"><text class="ok n" x="680" y="306" text-anchor="middle">dnsmasq --test ✓</text></g>
+<g class="s5"><text class="m xs" x="680" y="340" text-anchor="middle">temporary files deleted</text></g>
+<circle class="dot flow2" cx="764" cy="258" r="5"/>
+
+<!-- dnsmasq -->
+<rect class="box" x="776" y="140" width="144" height="200" rx="10"/>
+<text class="t n" x="848" y="166" text-anchor="middle">dnsmasq</text>
+<text class="m xs" x="848" y="184" text-anchor="middle">old set until now</text>
+<g class="s5">
+  <rect x="777" y="140" width="142" height="200" rx="10" fill="#111827"/>
+  <text class="t n" x="848" y="166" text-anchor="middle">dnsmasq</text>
+  <text class="ok big" x="848" y="222" text-anchor="middle">1.66 M</text>
+  <text class="t s" x="848" y="242" text-anchor="middle">domains, each once</text>
+  <text class="m xs" x="848" y="276" text-anchor="middle">RAM ~125 MB, steady</text>
+  <text class="m xs" x="848" y="294" text-anchor="middle">until the next update</text>
+  <text class="m xs" x="848" y="322" text-anchor="middle">copy on flash: 11 MB</text>
+</g>
+
+<!-- memory over the update -->
+<text class="t n" x="40" y="474">Router RAM used for blocking</text>
+<g class="s3"><rect x="236" y="436" width="10" height="10" rx="2" fill="#38bdf8"/><text class="m xs" x="252" y="445">all domains of the list</text>
+<rect x="390" y="436" width="10" height="10" rx="2" fill="#22c55e"/><text class="m xs" x="406" y="445">domains no other list has</text></g>
+<line x1="40" y1="540" x2="920" y2="540" stroke="#334155"/>
+<path class="mem" d="M40 528 L310 528 L400 512 L560 496 L620 494 L660 528 L920 528"/>
+<text class="m xs" x="44" y="522">125 MB: the current set</text>
+<g class="s4"><text class="warn xs" x="560" y="488">~187 MB at the peak: old set + new set being tested</text></g>
+<g class="s5"><text class="m xs" x="700" y="522">back to 125 MB: only the new set</text></g>
+</svg>

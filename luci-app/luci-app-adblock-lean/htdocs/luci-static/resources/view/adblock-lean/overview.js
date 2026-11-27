@@ -281,9 +281,23 @@ return view.extend({
 		if (!lists.length && !missing.length)
 			return E('p', { 'class': 'cbi-value-description' }, _('No per-list figures yet. They appear after the next list update.'));
 
+		// entries no other list has: written by updates with deduplication on, for block lists only;
+		// not shown in allowlist-only mode (block lists only add exceptions there)
+		var showUniq = st.whitelist_mode !== '1' && lists.some(function(l) { return l.uniq !== undefined; });
+		var uniqCell = function(l) {
+			if (l.uniq === undefined)
+				return '-';
+			var share = l.lines > 0 ? 100 * l.uniq / l.lines : 100;
+			if (share >= 1)
+				return fmtInt(l.uniq);
+			return liststatus.badge('warn', fmtInt(l.uniq) + ' (' + (share < 0.1 && l.uniq > 0 ? '<0.1' : share.toFixed(1)) + '%)',
+				_('Almost all of it is in your other lists: switching it off loses little'), true);
+		};
 		var rows = [ E('tr', { 'class': 'tr table-titles' }, [
 			E('th', { 'class': 'th' }, _('List')),
 			E('th', { 'class': 'th right' }, _('Entries')),
+			showUniq ? E('th', { 'class': 'th right', 'title': _('Domains that none of the other block lists has, counted at the last list update (before the allowlist is applied). A low figure means the list adds little.') },
+				[ _('Only in this list'), ' ', E('span', { 'aria-hidden': 'true', 'style': 'opacity:.6' }, 'ⓘ') ]) : '',
 			E('th', { 'class': 'th right' }, _('Download size'))
 		]) ];
 		var self = this;
@@ -296,6 +310,7 @@ return view.extend({
 			rows.push(E('tr', { 'class': 'tr' }, [
 				self.listCell(l.name),
 				E('td', { 'class': 'td right' }, [ entries ]),
+				showUniq ? E('td', { 'class': 'td right' }, [ uniqCell(l) ]) : '',
 				E('td', { 'class': 'td right' }, l.size.replace(/\s+/g, ' '))
 			]));
 		});
@@ -303,6 +318,7 @@ return view.extend({
 			rows.push(E('tr', { 'class': 'tr' }, [
 				self.listCell(s.name),
 				E('td', { 'class': 'td right' }, [ liststatus.badge('fail', _('Not loaded'), liststatus.reason(s.reason)) ]),
+				showUniq ? E('td', { 'class': 'td right' }, '-') : '',
 				E('td', { 'class': 'td right' }, '-')
 			]));
 		});
@@ -318,6 +334,7 @@ return view.extend({
 			return E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, label),
 				E('td', { 'class': 'td right' }, value),
+				showUniq ? E('td', { 'class': 'td' }, '') : '',
 				E('td', { 'class': 'td' }, '')
 			]);
 		};
@@ -332,6 +349,7 @@ return view.extend({
 		rows.push(E('tr', { 'class': 'tr' }, [
 			E('td', { 'class': 'td' }, E('strong', {}, _('In dnsmasq after merging duplicates'))),
 			E('td', { 'class': 'td right' }, E('strong', {}, fmtInt(st.entries))),
+			showUniq ? E('td', { 'class': 'td' }, '') : '',
 			E('td', { 'class': 'td' }, '')
 		]));
 		return E([], [

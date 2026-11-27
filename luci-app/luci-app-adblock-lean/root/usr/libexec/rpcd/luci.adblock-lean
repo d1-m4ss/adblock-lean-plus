@@ -170,6 +170,8 @@ allow_count() {
 # Per-part lines from the newest session log that processed parts and installed the result (the figures of a
 # failed update would not belong to the blockset in use), kept in the cache
 #   Successfully processed part:    <id>   [ 4.73 MiB  -   251,436 entries ]
+#   Entries no other list has:    <id>   [ 102,537 ]       (block lists, with deduplication on)
+# as '<id>|<size>|<entries>|<entries no other list has, or empty>' lines
 refresh_list_stats() {
 	local log stamp
 	mkdir -p "$CACHE_DIR"
@@ -182,8 +184,11 @@ refresh_list_stats() {
 			return
 		fi
 		sed "s/${ESC}\[[0-9;]*m//g" "$log" |
-			sed -n 's/.*Successfully processed part:[[:space:]]*\([^[:space:]]*\)[[:space:]]*\[[[:space:]]*\([0-9.]*[[:space:]]*[KMG]*i*B\)[[:space:]]*-[[:space:]]*\([0-9,]*\) entries.*/\1|\2|\3/p' |
-			tr -d ',' > "$CACHE_DIR/lists.tmp" &&
+			sed -n 's/.*Successfully processed part:[[:space:]]*\([^[:space:]]*\)[[:space:]]*\[[[:space:]]*\([0-9.]*[[:space:]]*[KMG]*i*B\)[[:space:]]*-[[:space:]]*\([0-9,]*\) entries.*/P|\1|\2|\3/p
+				s/.*Entries no other list has:[[:space:]]*\([^[:space:]]*\)[[:space:]]*\[[[:space:]]*\([0-9,]*\)[[:space:]]*\].*/U|\1|\2/p' |
+			tr -d ',' |
+			awk -F'|' '$1 == "U" { u[$2] = $3; next } { p[++n] = $2 "|" $3 "|" $4; id[n] = $2 }
+				END { for (i = 1; i <= n; i++) print p[i] "|" ((id[i] in u) ? u[id[i]] : "") }' > "$CACHE_DIR/lists.tmp" &&
 			mv "$CACHE_DIR/lists.tmp" "$CACHE_DIR/lists"
 		sed "s/${ESC}\[[0-9;]*m//g" "$log" | grep -o 'Processing time for blockset generation and import: .*' | tail -n1 \
 			| sed 's/.*: //; s/\.$//' > "$CACHE_DIR/lists.duration"
@@ -356,11 +361,12 @@ m_status() {
 	json_add_int lists_at "$(cat "$CACHE_DIR/lists.stamp" 2>/dev/null || echo 0)"
 	json_add_array lists
 	if [ -f "$CACHE_DIR/lists" ]; then
-		while IFS='|' read -r name size lines; do
+		while IFS='|' read -r name size lines uniq; do
 			json_add_object
 			json_add_string name "$name"
 			json_add_string size "$size"
 			json_add_int lines "${lines:-0}"
+			[ -n "$uniq" ] && json_add_int uniq "$uniq"
 			json_close_object
 		done < "$CACHE_DIR/lists"
 	fi
