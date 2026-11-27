@@ -295,14 +295,15 @@ return view.extend({
 			var share = l.lines > 0 ? 100 * l.uniq / l.lines : 100;
 			if (share >= 1)
 				return fmtInt(l.uniq);
-			return liststatus.badge('warn', fmtInt(l.uniq) + ' (' + (share < 0.1 && l.uniq > 0 ? '<0.1' : share.toFixed(1)) + '%)',
-				_('Almost all of it is in your other lists: switching it off loses little'), true);
+			// a sign and the figure only; the explanation is the note under the table and this tooltip
+			return E('div', { 'title': _('Only %s%% of this list is in no other list: switching it off loses little')
+				.format(share < 0.1 && l.uniq > 0 ? '<0.1' : (Math.floor(share * 10) / 10).toFixed(1)) },
+				[ liststatus.badge('warn', fmtInt(l.uniq), null, true) ]);
 		};
 		var rows = [ E('tr', { 'class': 'tr table-titles' }, [
 			E('th', { 'class': 'th' }, _('List')),
 			E('th', { 'class': 'th right' }, _('Entries')),
-			showUniq ? E('th', { 'class': 'th right', 'title': _('Domains that none of the other block lists has, counted at the last list update (before the allowlist is applied). A low figure means the list adds little.') },
-				[ _('Only in this list'), ' ', E('span', { 'aria-hidden': 'true', 'style': 'opacity:.6' }, 'ⓘ') ]) : '',
+			showUniq ? E('th', { 'class': 'th right', 'title': _('Domains that none of the other block lists has') }, _('Unique')) : '',
 			E('th', { 'class': 'th right' }, _('Download size'))
 		]) ];
 		var self = this;
@@ -359,6 +360,10 @@ return view.extend({
 		]));
 		return E([], [
 			E('table', { 'class': 'table' }, rows),
+			showUniq ? E('div', { 'class': 'cbi-value-description', 'style': 'margin:.5em 0' }, [
+				_('Unique: domains that no other block list has (allowlisted ones included).'),
+				liststatus.badge('warn', _('under 1% of the list: it adds almost nothing, switching it off loses little.'))
+			]) : '',
 			st.lists_at ? E('p', { 'class': 'cbi-value-description' },
 				_('From the list update at %s.').format(new Date(st.lists_at * 1000).toLocaleString())) : ''
 		]);

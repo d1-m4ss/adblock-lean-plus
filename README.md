@@ -343,11 +343,11 @@ first update with this version.
 
 ### Which lists add little
 
-The list table on the **Overview** page has a column **Only in this list**: how many of a block list's domains none
+The list table on the **Overview** page has a column **Unique**: how many of a block list's domains none
 of your other lists has. A list where that is under 1% gets an orange sign: almost all of it is already blocked by
 the others, so switching it off loses little and saves its download and processing time on every update (the router's
 memory stays about the same, as dnsmasq holds each domain once anyway). Example from the test router: HaGeZi Pop-up ads had
-71,191 domains, 70 of them in no other list, because HaGeZi PRO++ includes it. Counted during the update's
+71,191 domains, 70 of them in no other list. Counted during the update's
 deduplication (that step took about 8 s longer for 2 million entries on a GL-MT6000, where the old lists keep
 filtering meanwhile), so the figures change only after the next update and are not shown when `deduplication` is off.
 Domains of your allowlist are counted too, as they are removed only after this step.

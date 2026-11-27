@@ -64,28 +64,28 @@
   <rect class="track" x="236" y="140" width="300" height="14" rx="3"/>
   <rect class="bar" x="236" y="140" width="300" height="14" rx="3"/>
   <rect class="ubar" x="236" y="140" width="266" height="14" rx="3"/>
-  <text class="ok s s3" x="236" y="170">only in this list: 1,160,382</text>
+  <text class="ok s s3" x="236" y="170">unique: 1,160,382</text>
 
   <text class="t n" x="40" y="204">HaGeZi PRO++</text>
   <text class="m s f1" x="40" y="222">255,860 domains</text>
   <rect class="track" x="236" y="192" width="300" height="14" rx="3"/>
   <rect class="bar" x="236" y="192" width="59" height="14" rx="3"/>
   <rect class="ubar" x="236" y="192" width="24" height="14" rx="3"/>
-  <text class="ok s s3" x="236" y="222">only in this list: 102,537</text>
+  <text class="ok s s3" x="236" y="222">unique: 102,537</text>
 
   <text class="t n" x="40" y="256">OISD big</text>
   <text class="m s f1" x="40" y="274">222,296 domains</text>
   <rect class="track" x="236" y="244" width="300" height="14" rx="3"/>
   <rect class="bar" x="236" y="244" width="51" height="14" rx="3"/>
   <rect class="ubar" x="236" y="244" width="10" height="14" rx="3"/>
-  <text class="ok s s3" x="236" y="274">only in this list: 44,882</text>
+  <text class="ok s s3" x="236" y="274">unique: 44,882</text>
 
   <text class="t n" x="40" y="308">AdGuard DNS filter</text>
   <text class="m s f1" x="40" y="326">194,723 rules</text>
   <rect class="track" x="236" y="296" width="300" height="14" rx="3"/>
   <rect class="bar" x="236" y="296" width="45" height="14" rx="3"/>
   <rect class="ubar" x="236" y="296" width="25" height="14" rx="3"/>
-  <text class="ok s s3" x="236" y="326">only in this list: 109,869</text>
+  <text class="ok s s3" x="236" y="326">unique: 109,869</text>
   <text class="warn xs s2" x="296" y="307">||ads.example.com^  →  ads.example.com</text>
 
   <text class="t n" x="40" y="360">HaGeZi Pop-up ads</text>
@@ -93,13 +93,13 @@
   <rect class="track" x="236" y="348" width="300" height="14" rx="3"/>
   <rect class="bar" x="236" y="348" width="16" height="14" rx="3"/>
   <g class="s3"><circle class="warn" cx="244" cy="373" r="7"/><text x="244" y="377" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">!</text>
-  <text class="warn s" x="258" y="378">only in this list: 70 (0.1%): the other lists have the rest</text></g>
+  <text class="warn s" x="258" y="378">unique: 70 (0.1%): the other lists have the rest</text></g>
 
   <text class="t n" x="40" y="412">7 small lists</text>
   <text class="m s f1" x="40" y="430">5,672 domains</text>
   <rect class="track" x="236" y="400" width="300" height="14" rx="3"/>
   <rect class="bar" x="236" y="400" width="3" height="14" rx="1"/>
-  <text class="ok s s3" x="236" y="430">only in these lists: 3,333</text>
+  <text class="ok s s3" x="236" y="430">unique: 3,333</text>
 </g>
 
 <!-- domains flowing into the sort step -->
@@ -139,7 +139,7 @@
 <!-- memory over the update -->
 <text class="t n" x="40" y="474">Router RAM used for blocking</text>
 <g class="s3"><rect x="236" y="436" width="10" height="10" rx="2" fill="#38bdf8"/><text class="m xs" x="252" y="445">all domains of the list</text>
-<rect x="390" y="436" width="10" height="10" rx="2" fill="#22c55e"/><text class="m xs" x="406" y="445">domains no other list has</text></g>
+<rect x="390" y="436" width="10" height="10" rx="2" fill="#22c55e"/><text class="m xs" x="406" y="445">unique: no other list has them</text></g>
 <line x1="40" y1="540" x2="920" y2="540" stroke="#334155"/>
 <path class="mem" d="M40 528 L310 528 L400 512 L560 496 L620 494 L660 528 L920 528"/>
 <text class="m xs" x="44" y="522">125 MB: the current set</text>
