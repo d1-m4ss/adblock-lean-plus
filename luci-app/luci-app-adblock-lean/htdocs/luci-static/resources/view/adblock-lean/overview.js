@@ -274,7 +274,12 @@ return view.extend({
 
 	renderLists: function(st) {
 		var results = liststatus.map(st.list_status), shown = Object.create(null);
-		var lists = st.lists || [];
+		// the log has the lists in the order their downloads finished: largest first instead, your own lists
+		// (local files, '/...') last
+		var own = function(l) { return /^\//.test(l.name) ? 1 : 0; };
+		var lists = (st.lists || []).slice().sort(function(a, b) {
+			return own(a) - own(b) || (+b.lines || 0) - (+a.lines || 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+		});
 		lists.forEach(function(l) { shown[liststatus.key(l.name)] = true; });
 		// failed lists have no figures in the log: they get a row of their own
 		var missing = (st.list_status || []).filter(function(s) { return !s.ok && !shown[liststatus.key(s.name)]; });
