@@ -1,0 +1,51 @@
+name: Bug report
+description: Something does not work
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Router model
+      description: "`ubus call system board`, line `model`"
+      placeholder: GL.iNet GL-MT6000
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware
+      description: "`grep DISTRIB_DESCRIPTION /etc/openwrt_release` (a vendor firmware: its name and version too)"
+      placeholder: OpenWrt 25.12.6
+    validations:
+      required: true
+  - type: textarea
+    id: dnsmasq
+    attributes:
+      label: dnsmasq version
+      description: "`dnsmasq --version`"
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: pkg
+    attributes:
+      label: Package manager
+      options:
+        - apk
+        - opkg
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: >-
+        `logread -e adblock-lean` or LuCI: Services -> Adblock-lean-plus -> Log. Issues are public: remove
+        addresses, host names and list URLs you do not want to share. Do not attach router backups.
+      render: text

@@ -175,7 +175,10 @@ adblock-lean-plus-uninstall
 
 It asks whether to keep your settings and whether to remove the DoH proxies (suggested if the installer added them),
 shows the plan and waits for your confirmation. Before the proxies go, dnsmasq gets the DNS servers of your internet
-connection back (or `1.1.1.1` if there are none); if DNS would stop working, nothing is removed.
+connection back (or `1.1.1.1` if there are none); if DNS would stop working, nothing is removed. Of the plain-DNS
+exceptions for time servers it removes only those the installer added and noted; yours stay (so do those added by an
+earlier version, which kept no note: the uninstaller lists them). If you keep the proxies but not the settings and
+the installer has noted exceptions that stay, that note is the one file left in `/etc/adblock-lean`.
 
 | Option | What it does |
 |---|---|

@@ -391,6 +391,7 @@ process_set_part()
 		pipeline_msg \
 		ucl_err \
 		fail_reason \
+		rogue_element \
 		\
 		mirrors \
 		mirror \
@@ -484,6 +485,7 @@ process_set_part()
 		[ -n "${cur_mirror}" ] && msg_mirr=" [   mirror: ${cur_mirror}${mirror_pad} ]"
 
 		rm -f "${rogue_el_file}" "${part_stats_file}" "${ucl_err_file}" "${adg_allow_file}" "${adg_imp_file}" "${adg_skip_file}" "${oversize_file}"
+		rogue_element='' # set only if this attempt's rogue elements check finds one
 
 		msg="Processing ${format} blockset part"
 		get_pad pad "${msg}" 30
@@ -516,7 +518,9 @@ process_set_part()
 		${case_conv_or_cat} |
 
 		# check lists for rogue elements
-		tee >(${SED_CMD} -nE "/${val_entry_regex}/d;p;:1 n;b1" > "${rogue_el_file}") |
+		# (the trailing ':' keeps this subshell, and with it the pipe to the next stage, open until sed is done:
+		# the pipeline does not wait for a process substitution, and the result is read right after it)
+		tee >(${SED_CMD} -nE "/${val_entry_regex}/d;p;:1 n;b1" > "${rogue_el_file}"; :) |
 
 		# compress or cat
 		${part_compr_or_cat} > "${dest_file}"

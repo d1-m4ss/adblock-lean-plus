@@ -1,0 +1,19 @@
+name: tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  openwrt:
+    name: OpenWrt ${{ matrix.openwrt }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        openwrt: ['25.12.6', '24.10.8']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and tests with BusyBox
+        run: docker run --rm -v "$PWD:/src:ro" "openwrt/rootfs:x86_64-${{ matrix.openwrt }}" /bin/sh /src/tools/ci.sh

@@ -933,6 +933,7 @@ mk_upgrade_keep_file()
 			"${ABL_CFG_DIR:?}/99-abl-hotplug.sh" \
 			"${ABL_CFG_DIR:?}/luci-subscriptions" \
 			"${ABL_CFG_DIR:?}/doh-added-by-installer" \
+			"${ABL_CFG_DIR:?}/ntp-exceptions-added-by-installer" \
 			"/usr/sbin/adblock-lean-plus-update" \
 			"/usr/sbin/adblock-lean-plus-uninstall" \
 			"/etc/rc.d/S${START}adblock-lean" \

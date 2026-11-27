@@ -25,6 +25,7 @@ DHCP_BAK=/tmp/adblock-lean-plus-dhcp.bak
 VIEWS=/www/luci-static/resources/view/adblock-lean
 RPCD=/usr/libexec/rpcd/luci.adblock-lean
 NTP_DNS='1.1.1.1 1.0.0.1'
+NTP_MARK=$CFG/ntp-exceptions-added-by-installer
 FALLBACK_DNS=1.1.1.1
 
 say() { printf '%s\n' "$*"; }
@@ -92,7 +93,7 @@ uses_proxies() { # instance
 	for _s in $(uci -q get "dhcp.$1.server"); do is_proxy "$_s" && return 0; done
 	return 1
 }
-# the time server names the installer may have added plain-DNS exceptions for
+# the time server names a plain-DNS exception can be for
 ntp_domains() {
 	for _h in $(uci -q get system.ntp.server); do
 		case "$_h" in *:*) continue ;; *[!0-9.]*) ;; *) continue ;; esac
@@ -130,9 +131,15 @@ give_back_dns() {
 		for _s in $(uci -q get "dhcp.$_i.server"); do
 			if is_proxy "$_s"; then uci del_list "dhcp.$_i.server=$_s"; fi
 		done
+		# time server exceptions: only those the installer noted as its own
+		for _s in $(sed -n "s/^$_i //p" "$NTP_MARK" 2>/dev/null); do uci -q del_list "dhcp.$_i.server=$_s"; done
+		_kept=''
 		for _d in $(ntp_domains); do
-			for _ip in $NTP_DNS; do uci -q del_list "dhcp.$_i.server=/$_d/$_ip"; done
+			for _ip in $NTP_DNS; do
+				case " $(uci -q get "dhcp.$_i.server") " in *" /$_d/$_ip "*) _kept="$_kept /$_d/$_ip" ;; esac
+			done
 		done
+		[ -z "$_kept" ] || say "  kept in dnsmasq '$_i' (not noted as added by the installer):$_kept"
 		_plain=0
 		for _s in $(uci -q get "dhcp.$_i.server"); do case "$_s" in /*) ;; *) _plain=1 ;; esac; done
 		[ "$_plain" = 1 ] || uci -q delete "dhcp.$_i.noresolv"
@@ -147,6 +154,10 @@ give_back_dns() {
 		uci add_list "dhcp.$_i.server=$FALLBACK_DNS" && uci commit dhcp && /etc/init.d/dnsmasq restart >/dev/null 2>&1 &&
 			resolves "$_port" || { restore_dhcp; die "DNS does not work without the proxies: nothing was removed"; }
 	done
+	# their exceptions are gone: an equal one added later is the user's
+	if [ -f "$NTP_MARK" ]; then
+		for _i in $PROXY_USERS; do sed -i "/^$_i /d" "$NTP_MARK"; done
+	fi
 	rm -f "$DHCP_BAK"
 	trap - INT TERM
 	trap '' HUP PIPE
@@ -161,7 +172,8 @@ fi
 
 blocker=0; { [ -e "$SVC" ] || [ -d /usr/lib/adblock-lean ]; } && blocker=1
 pages=0; { [ -e "$RPCD" ] || [ -d "$VIEWS" ]; } && pages=1
-settings=0; [ -d "$CFG" ] && settings=1
+# the note alone, left by an earlier removal that kept the proxies, is not "your settings"
+settings=0; [ -d "$CFG" ] && [ "$(ls -A "$CFG")" != "${NTP_MARK##*/}" ] && settings=1
 doh=0; [ -x /etc/init.d/https-dns-proxy ] && doh=1
 # added by the installer: its marker, or the header of the config it writes
 doh_ours=0
@@ -272,7 +284,14 @@ if [ "$REMOVE_DOH" = 1 ]; then
 fi
 
 # settings kept from an earlier removal, or left behind
-if [ "$KEEP_SETTINGS" = 0 ] && [ -z "$failed" ]; then rm -rf /etc/adblock-lean; fi
+if [ "$KEEP_SETTINGS" = 0 ] && [ -z "$failed" ]; then
+	if [ -s "$NTP_MARK" ]; then
+		# exceptions that stay in dnsmasq keep their note, so that a later removal knows they are not yours
+		for f in "$CFG"/* "$CFG"/.[!.]*; do [ "$f" = "$NTP_MARK" ] || rm -rf "$f"; done
+	else
+		rm -rf /etc/adblock-lean
+	fi
+fi
 
 step "Check"
 for i in $(instances); do

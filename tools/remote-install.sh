@@ -22,6 +22,7 @@ DOH_CFG=/etc/config/https-dns-proxy
 DHCP_BAK=/tmp/adblock-lean-plus-dhcp.bak
 AG=https://adguardteam.github.io/HostlistsRegistry/assets
 NTP_DNS='1.1.1.1 1.0.0.1'
+NTP_MARK=$CFG/ntp-exceptions-added-by-installer
 INTERACTIVE=0; [ "$YES" = 0 ] && [ -t 0 ] && INTERACTIVE=1
 say() { printf '%s\n' "$*"; }
 step() { printf '\n== %s\n' "$*"; }
@@ -125,6 +126,18 @@ resolves() { # port [name] [tries]: wait until the DNS server on 127.0.0.1:port 
 	done
 	return 1
 }
+# record_ntp ADDED REMOVED_AGAIN (domain lists): the uninstaller removes only the time server exceptions listed
+# in $NTP_MARK, all others are the user's own
+record_ntp() {
+	for _d in $1; do
+		case " $2 " in *" $_d "*) continue ;; esac
+		for _ip in $NTP_DNS; do
+			grep -qxF "$INSTANCE /$_d/$_ip" "$NTP_MARK" 2>/dev/null && continue
+			{ mkdir -p "$CFG" && echo "$INSTANCE /$_d/$_ip" >> "$NTP_MARK"; } ||
+				say "  WARNING: could not note the exception for '$_d': the uninstaller will keep it"
+		done
+	done
+}
 restore_dhcp() {
 	uci -q revert dhcp
 	cp "$DHCP_BAK" /etc/config/dhcp && /etc/init.d/dnsmasq restart >/dev/null 2>&1
@@ -184,6 +197,7 @@ change_dns() {
 				_rv=1
 			fi
 		fi
+		[ "$_rv" = 1 ] || record_ntp "$_added" "$_bad"
 		rm -f "$DHCP_BAK"
 	fi
 	trap - HUP INT TERM PIPE
