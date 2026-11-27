@@ -47,7 +47,7 @@ benchmark from a LAN client.
 | Blocked domain, median | 3–4 ms | 2 ms |
 | Uncached queries | depend on the upstream | no consistent difference |
 | List update (7 lists) | in the background | 51 s (TIF full: 140 s), once a day |
-| Filtering right after boot | yes | with `--persist` (early boot script); otherwise after the lists are loaded |
+| Filtering right after boot | yes | with `--persist` (early boot script), also after a firmware upgrade; otherwise after the lists are loaded |
 | Web UI cost | always running | none unless a page is open; no measurable effect on DNS latency |
 | Query log, statistics, per-client rules | yes | no |
 
@@ -88,8 +88,8 @@ CPU was no argument against AdGuard Home in our runs (13.9 s, measured at anothe
 | **Subscriptions** | **AdGuard Home's list catalog** |
 | [![Subscriptions](docs/screenshots/subscriptions.png)](docs/screenshots/subscriptions.png) | [![Catalog](docs/screenshots/adguard-catalog.png)](docs/screenshots/adguard-catalog.png) |
 
-Rendered from this repository's view files with data captured from a router running it (LuCI default theme); the
-"Last update" column is filled in for the captured update.
+Rendered from this repository's view files with data captured on 2026-11-27 from a router running it (LuCI default
+theme). The "Last update" column on the subscriptions page shows how each list's last download went ([List status](#list-status)).
 
 ## ✅ Requirements
 
@@ -132,7 +132,7 @@ done.
 | `--utils` / `--no-utils` | gawk, GNU sed, coreutils-sort: list processing is faster with them |
 | `--preset NAME` | mini, small, medium, large or huge (default: chosen from RAM) |
 | `--lists adguard` | add AdGuard DNS filter and AdGuard Popup Hosts to the preset's HaGeZi lists |
-| `--persist` | keep the blockset on flash: filtering right after boot, but several MB rewritten on every update (good for eMMC/SSD/USB) |
+| `--persist` | keep the blockset on flash: filtering right after boot and after a firmware upgrade, but ~10 MB rewritten on every update (good for eMMC/SSD/USB), and router backups grow by as much (see "After an OpenWrt firmware upgrade" under [Uninstall](#uninstall)) |
 | `--instance NAME` | dnsmasq instance to filter (needed only when there are several) |
 | `--start`, `--enable` | download the lists now; start at boot (`--no-start`, `--no-enable`) |
 | `--upgrade` | replace the scripts of an existing installation, keep configs |
@@ -203,9 +203,11 @@ after boot. With "start at boot" off nothing is kept: save a [backup](#backup-an
 afterwards.
 
 The web pages and the blocklist are kept only by versions from 2026-11-27 on, once they have started once. With an
-older version, run `adblock-lean-plus-update` after the upgrade to get the pages back. The list of kept files also
-decides what a router backup (System → Backup) holds: with the blocklist on flash, a backup grows by about its size
-(~10 MB for 1.4 million domains).
+older version, run `adblock-lean-plus-update` after the upgrade to get the pages back.
+
+**Router backups get bigger with the blocklist on flash.** The files a firmware upgrade keeps are also what a router
+backup (System → Backup, `sysupgrade -b`) contains, so every such backup includes the saved blocklist: about +10 MB
+for 1.6 million domains. Without it backups stay small, and the lists are downloaded again after an upgrade.
 
 A plain `sysupgrade` that keeps the settings drops added packages such as `https-dns-proxy` while dnsmasq still
 forwards to it, so DNS stops working. Give dnsmasq the internet connection's DNS back, then update:
@@ -333,7 +335,8 @@ A list that can not be downloaded is skipped and the update goes on without it, 
 Reasons: HTTP error, server not reachable, timed out, not a block list, too few usable entries (also a web page served
 as an AdGuard or hosts list), larger than the size limit, processing failed. A list that moved and is no longer served
 at the old address shows up this way; an abandoned list that can still be downloaded does not. The results are kept in
-`/etc/adblock-lean/list-status` (two or three small writes per update), so they survive a reboot. They appear after the
+`/etc/adblock-lean/list-status` (two or three small writes per update), so they survive a reboot and, while "start at
+boot" is on, a firmware upgrade. They appear after the
 first update with this version.
 
 ### Backup and import
@@ -344,6 +347,9 @@ LuCI → Services → Adblock-lean-plus, section **Backup**: "Download backup" s
 then choose "Update lists now". Not in the file: DNS/DoH settings, the size limits of the preset and other options of the
 adblock-lean config files (such as allowlist-only mode). A hand-written
 update schedule (not "daily at …") is saved but not restored. Importing "start at boot: no" also stops blocking.
+
+This backup is a small JSON file. The router's own backup (System → Backup) is a different thing: with the blocklist
+kept on flash it also contains that blocklist, about 10 MB.
 
 ### Input limits
 
