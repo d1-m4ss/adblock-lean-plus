@@ -23,7 +23,7 @@ missing pieces together:
 | 🖱️ The existing LuCI app was written for adblock-lean 0.8.1 | reworked pages: subscriptions you can switch off, AdGuard's list catalog, status, which list failed to download, router resources, backup |
 | 🔐 Encrypted DNS set up by hand | the installer adds three DoH proxies, switches dnsmasq to them and rolls back if DNS stops working |
 | 📦 Several projects to install and wire together | one installer that looks at your router, asks, shows the plan and then installs |
-| ⬆️ `sysupgrade` forgets the setup | scripts and settings are kept while "start at boot" is on (untested on a real upgrade, see [Requirements](#-requirements)) |
+| ⬆️ `sysupgrade` forgets the setup | scripts, settings, web pages and a blocklist kept on flash are kept while "start at boot" is on (untested on a real upgrade, see [Requirements](#-requirements)) |
 
 **What you give up** compared with AdGuard Home: the query log, statistics and per-client settings. Blocking is
 silent: dnsmasq does not log queries, adblock-lean logs only its own updates.
@@ -196,9 +196,16 @@ Not tested on a real firmware upgrade yet: what follows is how it is built to be
 [backup](#backup-and-import) of the plugin settings first.
 
 Upgrade OpenWrt with Attended Sysupgrade (LuCI: System → Attended Sysupgrade, or `owut`), which builds an image that
-includes your installed packages. Then run `adblock-lean-plus-update`: the web pages are not kept by a firmware
-upgrade. While "start at boot" is on, the scripts, settings and these commands are kept; with it off nothing is: save a
-[backup](#backup-and-import) first and install again afterwards.
+includes your installed packages (the DoH proxies among them). While "start at boot" is on, the upgrade keeps the
+scripts, settings, these commands, the web pages and the list status, and a blocklist kept on flash. Filtering then
+works from the first boot. Without the blocklist on flash it starts once the lists are downloaded, about two minutes
+after boot. With "start at boot" off nothing is kept: save a [backup](#backup-and-import) first and install again
+afterwards.
+
+The web pages and the blocklist are kept only by versions from 2026-11-27 on, once they have started once. With an
+older version, run `adblock-lean-plus-update` after the upgrade to get the pages back. The list of kept files also
+decides what a router backup (System → Backup) holds: with the blocklist on flash, a backup grows by about its size
+(~10 MB for 1.4 million domains).
 
 A plain `sysupgrade` that keeps the settings drops added packages such as `https-dns-proxy` while dnsmasq still
 forwards to it, so DNS stops working. Give dnsmasq the internet connection's DNS back, then update:

@@ -917,12 +917,30 @@ rm_conf_scripts()
 
 # List adblock-lean files in /lib/upgrade/keep.d so that sysupgrade (with 'keep settings') preserves
 # the scripts, the config and the enabled state, and the service comes back by itself after an upgrade.
-# The saved blockset (persist dir) is left out: it is several MB and is rebuilt after the upgrade.
+# Also kept: the LuCI pages (not a package, so an image with the installed packages does not bring them back), the
+# list status, and a persistent blockset stored on the root filesystem together with its conf-script, so the early
+# boot script filters from the first boot of the new firmware (one on another drive survives the upgrade by itself).
 # Only written while the service is enabled; rewritten only when the content changes.
 mk_upgrade_keep_file()
 {
 	local keep_content
 	keep_content="$(
+		upgrade_keep_persist() {
+			local cfg dir
+			set +f
+			for cfg in "${ABL_CFG_DIR:?}"/blockset-*.conf
+			do
+				[ -f "${cfg}" ] || continue
+				case "$(sed -n 's/^[ \t]*persist_blockset_mode="\([a-z]*\)".*/\1/p' "${cfg}")" in
+					manual|managed) ;;
+					*) continue
+				esac
+				dir="$(sed -n 's/^[ \t]*persist_blockset_dir="\(.*\)".*/\1/p' "${cfg}")"
+				case "${dir}" in /?*) ;; *) continue; esac
+				[ -d "${dir}" ] && [ "$(df -P "${dir}" 2>/dev/null | awk 'END { print $NF }')" = / ] && # mount point: last field, also if wrapped
+					printf '%s\n' "${dir%/}/"
+			done | awk '!seen[$0]++'
+		}
 		printf '%s\n' \
 			"# adblock-lean: files preserved by sysupgrade (written by adblock-lean, removed when disabled)" \
 			"${ABL_SERVICE_PATH:?}" \
@@ -941,7 +959,14 @@ mk_upgrade_keep_file()
 			"${ABL_HOTPLUG_PATH_ENABLED:?}" \
 			"${ABL_HOTPLUG_PATH_DISABLED:?}" \
 			"${ABL_EARLY_SERVICE_PATH:?}" \
-			"/etc/rc.d/S18${ABL_EARLY_SERVICE_PATH##*/}"
+			"/etc/rc.d/S18${ABL_EARLY_SERVICE_PATH##*/}" \
+			"${ABL_CFG_DIR:?}/list-status" \
+			"${ABL_CFG_DIR:?}/boot-cs.*" \
+			"/usr/libexec/rpcd/luci.adblock-lean" \
+			"/usr/share/rpcd/acl.d/luci-app-adblock-lean.json" \
+			"/usr/share/luci/menu.d/luci-app-adblock-lean.json" \
+			"/www/luci-static/resources/view/adblock-lean/"
+		upgrade_keep_persist
 	)"
 	[ -d "${ABL_UPGRADE_KEEP_PATH%/*}" ] || return 0
 	[ -f "${ABL_UPGRADE_KEEP_PATH:?}" ] && [ "$(cat "${ABL_UPGRADE_KEEP_PATH}")" = "${keep_content}" ] && return 0
