@@ -668,7 +668,7 @@ m_detect_format() {
 		l ~ /^(local|server|address)=\// { dnsmasq++; next }
 		l ~ /^(0\.0\.0\.0|127\.0\.0\.1|::1?)[ \t]+[a-z0-9._-]+$/ { hosts++; next }
 		l ~ /^(@@)?\|\|?[A-Za-z0-9._-]+\^?\|?(\$(important|dnsrewrite=[^,]*)(,(important|dnsrewrite=[^,]*))*)?$/ { adg++; next }
-		l ~ /^[A-Za-z0-9*._-]+$/ && l ~ /\./ { raw++; next }
+		l ~ /^[A-Za-z0-9*._-]+$/ { raw++; next }	# a name without a dot is a whole TLD (HaGeZi lists have some)
 		{ other++ }
 		END { printf "%d %d %d %d %d %d\n%s", n, adg, hosts, raw, dnsmasq, other, substr(title, 1, 300) }')
 	title=$(printf '%s\n' "$res" | sed -n 2p)
@@ -684,6 +684,9 @@ m_detect_format() {
 	elif [ "$5" -gt "$2" ] && [ "$5" -gt "$3" ] && [ "$5" -gt "$4" ]; then json_add_string format dnsmasq
 	elif [ "$2" -gt 0 ]; then json_add_string format adguard
 	elif [ "$3" -ge "$4" ]; then json_add_string format hosts
+	# a plain-domain list may have no other lines (one would fail the whole list); otherwise this is a browser
+	# list with a few domain-like lines, and the AdGuard conversion keeps its usable rules and skips the rest
+	elif [ "$6" -gt 0 ]; then json_add_string format adguard
 	else json_add_string format raw
 	fi
 	json_dump
